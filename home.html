@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ultra Fischer</title>
+    <link rel="shortcut icon" href="favicon.ico" type="image/x-icon" />
+    <link rel="stylesheet" href="maingame/css/chessboard-1.0.0.min.css" />
+    <link rel="stylesheet" href="maingame/css/chessboard.css" />
+    <script src="maingame/js/jquery-1.12.4.min.js"></script>
+    <script src="maingame/js/chess.js"></script>
+    <script src="maingame/js/chessboard-1.0.0.js"></script>
+    <script src="maingame/js/chessboard.js" defer type="module"></script>
+  </head>
+  <body data-theme="dark">
+    <header class="topbar">
+      <div class="brand">
+        <p class="eyebrow">Ultra Fischer</p>
+        <h1>Ultra Fischer</h1>
+        <p class="subtitle">
+          Randomized full-piece positions filtered by Stockfish in the browser.
+        </p>
+      </div>
+      <div class="topbar-actions">
+        <button
+          id="settings-toggle"
+          class="utility-button"
+          type="button"
+          aria-expanded="false"
+        >
+          Open Settings
+        </button>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <section class="board-panel">
+        <div class="panel-head">
+          <div>
+            <p class="panel-kicker">Game Setup</p>
+            <h2>Choose your side</h2>
+          </div>
+          <div class="color-picker" role="group" aria-label="Choose your color">
+            <button class="color-button active" data-color="w" type="button">
+              White
+            </button>
+            <button class="color-button" data-color="b" type="button">
+              Black
+            </button>
+            <button class="color-button" data-color="random" type="button">
+              Random
+            </button>
+          </div>
+        </div>
+
+        <div class="board-stage">
+          <aside class="eval-panel">
+            <button id="eval-toggle" class="eval-toggle" type="button">
+              Hide Eval Bar
+            </button>
+            <button id="hint-button" class="eval-toggle" type="button">
+              Show Hint
+            </button>
+            <div id="eval-shell" class="eval-shell" aria-live="polite">
+              <div class="eval-head">
+                <span id="eval-label">0.0</span>
+                <span id="eval-depth">Depth --</span>
+              </div>
+              <div class="eval-track">
+                <div id="eval-fill" class="eval-fill"></div>
+                <div id="eval-marker" class="eval-marker"></div>
+              </div>
+              <div class="eval-foot">
+                <span>Black</span>
+                <span>White</span>
+              </div>
+            </div>
+          </aside>
+
+          <div class="board-stack">
+            <div class="board-frame">
+              <div class="board-meta">
+                <span id="mode-pill" class="pill">Player vs AI</span>
+                <span id="status-text" class="status-text">Loading engine...</span>
+              </div>
+              <div id="board" class="board"></div>
+            </div>
+
+            <div class="controls">
+              <button id="new-game" class="control-button primary" type="button">
+                New Position
+              </button>
+              <button id="undo" class="control-button" type="button">
+                Undo Pair
+              </button>
+              <button id="toggle-mode" class="control-button" type="button">
+                Switch to PvP
+              </button>
+              <button id="share-position" class="control-button" type="button">
+                Share FEN
+              </button>
+              <button id="resign" class="control-button danger" type="button">
+                Resign
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="info-panel">
+        <section class="card">
+          <p class="panel-kicker">Position</p>
+          <div class="stats">
+            <div>
+              <span class="stat-label">You play</span>
+              <strong id="player-color-label">White</strong>
+            </div>
+            <div>
+              <span class="stat-label">Turn</span>
+              <strong id="turn-label">White</strong>
+            </div>
+          </div>
+        </section>
+
+        <section id="settings-card" class="card settings-card hidden">
+          <div class="history-head">
+            <div>
+              <p class="panel-kicker">Settings</p>
+              <h2>Search Tuning</h2>
+            </div>
+          </div>
+          <div class="settings-actions">
+            <button id="theme-toggle" class="utility-button settings-button" type="button">
+              Switch to Light Mode
+            </button>
+          </div>
+          <div class="setting-list">
+            <label class="setting-field" for="position-depth">
+              <span class="setting-label">Position search depth</span>
+              <select id="position-depth">
+                <option value="8">8</option>
+                <option value="10">10</option>
+                <option value="12" selected>12</option>
+                <option value="14">14</option>
+              </select>
+            </label>
+            <label class="setting-field" for="ai-strength">
+              <span class="setting-label">AI strength</span>
+              <select id="ai-strength">
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard" selected>Hard</option>
+                <option value="very-hard">Very Hard</option>
+              </select>
+            </label>
+          </div>
+          <p id="settings-caption" class="caption">
+            Deeper position filtering creates tougher, more balanced starting setups.
+          </p>
+        </section>
+
+        <section class="card history-card">
+          <div class="history-head">
+            <div>
+              <p class="panel-kicker">Move List</p>
+              <h2>Game Record</h2>
+            </div>
+          </div>
+          <div class="history-table history-header">
+            <span>#</span>
+            <span>White</span>
+            <span>Black</span>
+          </div>
+          <div id="move-history" class="move-history" aria-live="polite"></div>
+        </section>
+      </aside>
+    </main>
+    <div id="toast" class="toast" aria-live="polite"></div>
+  </body>
+</html>
