@@ -14,168 +14,203 @@
     <script src="maingame/js/chessboard.js" defer type="module"></script>
   </head>
   <body data-theme="dark">
-    <header class="topbar">
-      <div class="brand">
-        <p class="eyebrow">Ultra Fischer</p>
-        <h1>Ultra Fischer</h1>
-        <p class="subtitle">
-          Randomized full-piece positions filtered by Stockfish in the browser.
-        </p>
-      </div>
-      <div class="topbar-actions">
+    <header class="app-header">
+      <a class="brand" href="home.html" aria-label="Ultra Fischer home">
+        <span class="brand-mark" aria-hidden="true">UF</span>
+        <span class="brand-name">Ultra Fischer</span>
+      </a>
+      <div class="header-actions">
+        <span class="header-note">Randomized chess</span>
         <button
           id="settings-toggle"
-          class="utility-button"
+          class="icon-button"
           type="button"
           aria-expanded="false"
+          aria-controls="settings-card"
+          aria-label="Open settings"
+          title="Settings"
         >
-          Open Settings
+          <span aria-hidden="true">&#9881;</span>
         </button>
       </div>
     </header>
 
-    <main class="app-shell">
-      <section class="board-panel">
-        <div class="panel-head">
-          <div>
-            <p class="panel-kicker">Game Setup</p>
-            <h2>Choose your side</h2>
+    <main class="game-shell">
+      <section class="game-layout" aria-label="Ultra Fischer game">
+        <section class="board-column" aria-label="Chessboard">
+          <div class="board-topline">
+            <span id="mode-pill" class="mode-label">Player vs AI</span>
+            <span id="status-text" class="status-text" aria-live="polite">Loading engine...</span>
           </div>
-          <div class="color-picker" role="group" aria-label="Choose your color">
-            <button class="color-button active" data-color="w" type="button">
-              White
-            </button>
-            <button class="color-button" data-color="b" type="button">
-              Black
-            </button>
-            <button class="color-button" data-color="random" type="button">
-              Random
-            </button>
-          </div>
-        </div>
 
-        <div class="board-stage">
-          <aside class="eval-panel">
-            <button id="eval-toggle" class="eval-toggle" type="button">
-              Hide Eval Bar
-            </button>
-            <button id="hint-button" class="eval-toggle" type="button">
-              Show Hint
-            </button>
-            <div id="eval-shell" class="eval-shell" aria-live="polite">
-              <div class="eval-head">
-                <span id="eval-label">0.0</span>
-                <span id="eval-depth">Depth --</span>
+          <div class="board-row">
+            <aside id="eval-panel" class="eval-panel" aria-label="Position evaluation">
+              <div id="eval-shell" class="eval-shell" role="img" aria-label="Position evaluation">
+                <div class="eval-track">
+                  <div id="eval-fill" class="eval-fill"></div>
+                  <div id="eval-marker" class="eval-marker"></div>
+                </div>
               </div>
-              <div class="eval-track">
-                <div id="eval-fill" class="eval-fill"></div>
-                <div id="eval-marker" class="eval-marker"></div>
+              <div class="eval-readout">
+                <strong id="eval-label">0.0</strong>
+                <span id="eval-depth">--</span>
               </div>
-              <div class="eval-foot">
-                <span>Black</span>
-                <span>White</span>
-              </div>
-            </div>
-          </aside>
+              <button
+                id="eval-toggle"
+                class="micro-button"
+                type="button"
+                aria-label="Hide evaluation bar"
+                title="Hide evaluation bar"
+              >
+                <span aria-hidden="true">&#8722;</span>
+              </button>
+            </aside>
 
-          <div class="board-stack">
-            <div class="board-frame">
-              <div class="board-meta">
-                <span id="mode-pill" class="pill">Player vs AI</span>
-                <span id="status-text" class="status-text">Loading engine...</span>
+            <div class="board-stack">
+              <div class="board-frame">
+                <div id="board" class="board"></div>
               </div>
-              <div id="board" class="board"></div>
-            </div>
 
-            <div class="controls">
-              <button id="new-game" class="control-button primary" type="button">
-                New Position
-              </button>
-              <button id="undo" class="control-button" type="button">
-                Undo Pair
-              </button>
-              <button id="toggle-mode" class="control-button" type="button">
-                Switch to PvP
-              </button>
-              <button id="share-position" class="control-button" type="button">
-                Share FEN
-              </button>
-              <button id="resign" class="control-button danger" type="button">
-                Resign
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
+              <div class="board-actions" aria-label="Game controls">
+                <button id="undo" class="icon-button action-button" type="button" aria-label="Undo pair" title="Undo pair">
+                  <span aria-hidden="true">&#8617;</span>
+                </button>
+                <button id="hint-button" class="icon-button action-button" type="button" aria-label="Show hint" title="Show hint">
+                  <span aria-hidden="true">&#9733;</span>
+                </button>
+                <button id="new-game" class="compact-button primary" type="button">New Game</button>
+                <button id="history-toggle" class="compact-button mobile-only" type="button" aria-controls="game-panel" aria-expanded="false">Moves</button>
+                <button id="share-position" class="icon-button action-button" type="button" aria-label="Copy FEN" title="Copy FEN">
+                  <span aria-hidden="true">&#10697;</span>
+                </button>
+                <button id="toggle-mode" class="compact-button secondary" type="button">PvP</button>
+                <button id="resign" class="compact-button danger" type="button">Resign</button>
+              </div>
 
-      <aside class="info-panel">
-        <section class="card">
-          <p class="panel-kicker">Position</p>
-          <div class="stats">
-            <div>
-              <span class="stat-label">You play</span>
-              <strong id="player-color-label">White</strong>
-            </div>
-            <div>
-              <span class="stat-label">Turn</span>
-              <strong id="turn-label">White</strong>
+              <div class="player-strip">
+                <span>You: <strong id="player-color-label">White</strong></span>
+                <span aria-hidden="true">&bull;</span>
+                <strong id="turn-label">White to move</strong>
+              </div>
             </div>
           </div>
         </section>
 
-        <section id="settings-card" class="card settings-card hidden">
-          <div class="history-head">
+        <aside id="game-panel" class="game-panel" aria-label="Game record">
+          <div class="game-panel-head">
             <div>
-              <p class="panel-kicker">Settings</p>
-              <h2>Search Tuning</h2>
+              <span class="panel-kicker">Game record</span>
+              <strong id="opponent-label">Stockfish Level 4</strong>
             </div>
-          </div>
-          <div class="settings-actions">
-            <button id="theme-toggle" class="utility-button settings-button" type="button">
-              Switch to Light Mode
+            <button id="history-close" class="icon-button mobile-only" type="button" aria-label="Close move history" title="Close move history">
+              <span aria-hidden="true">&#10005;</span>
             </button>
           </div>
-          <div class="setting-list">
-            <label class="setting-field" for="position-depth">
-              <span class="setting-label">Position search depth</span>
-              <select id="position-depth">
-                <option value="8">8</option>
-                <option value="10">10</option>
-                <option value="12" selected>12</option>
-                <option value="14">14</option>
-              </select>
-            </label>
-            <label class="setting-field" for="ai-strength">
-              <span class="setting-label">AI strength</span>
-              <select id="ai-strength">
-                <option value="easy">Easy</option>
-                <option value="medium">Medium</option>
-                <option value="hard" selected>Hard</option>
-                <option value="very-hard">Very Hard</option>
-              </select>
-            </label>
-          </div>
-          <p id="settings-caption" class="caption">
-            Deeper position filtering creates tougher, more balanced starting setups.
-          </p>
-        </section>
 
-        <section class="card history-card">
-          <div class="history-head">
-            <div>
-              <p class="panel-kicker">Move List</p>
-              <h2>Game Record</h2>
-            </div>
+          <div class="record-summary">
+            <span id="record-color">You: White</span>
+            <span id="record-turn">White to move</span>
           </div>
-          <div class="history-table history-header">
+
+          <div class="history-table history-header" aria-hidden="true">
             <span>#</span>
             <span>White</span>
             <span>Black</span>
           </div>
           <div id="move-history" class="move-history" aria-live="polite"></div>
-        </section>
-      </aside>
+        </aside>
+      </section>
     </main>
+
+    <section id="settings-card" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="overlay-surface settings-surface">
+        <div class="overlay-head">
+          <div>
+            <span class="panel-kicker">Preferences</span>
+            <h2 id="settings-title">Settings</h2>
+          </div>
+          <button id="settings-close" class="icon-button" type="button" aria-label="Close settings" title="Close settings">
+            <span aria-hidden="true">&#10005;</span>
+          </button>
+        </div>
+        <div class="setting-list">
+          <label class="setting-field" for="ai-strength">
+            <span>
+              <strong>Stockfish level</strong>
+              <small id="ai-strength-detail">Depth 5 &middot; 200 ms</small>
+            </span>
+            <select id="ai-strength">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4" selected>4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+            </select>
+          </label>
+          <label class="setting-field" for="position-depth">
+            <span>
+              <strong>Position filter depth</strong>
+              <small>Used when generating a new random position</small>
+            </span>
+            <select id="position-depth">
+              <option value="8">8</option>
+              <option value="10">10</option>
+              <option value="12" selected>12</option>
+              <option value="14">14</option>
+            </select>
+          </label>
+          <div class="setting-field setting-toggle-row">
+            <span>
+              <strong>Evaluation bar</strong>
+              <small>Keep a strong analysis engine beside the board</small>
+            </span>
+            <button id="eval-setting-toggle" class="compact-button secondary" type="button">Visible</button>
+          </div>
+          <div class="setting-field setting-toggle-row">
+            <span>
+              <strong>Board theme</strong>
+              <small id="settings-caption">Dark interface</small>
+            </span>
+            <button id="theme-toggle" class="compact-button secondary" type="button">Light</button>
+          </div>
+        </div>
+        <p class="overlay-footnote">Settings apply to the next engine request. The evaluation and hint engine stays independent of your opponent level.</p>
+      </div>
+    </section>
+
+    <section id="new-game-dialog" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="new-game-title">
+      <div class="overlay-surface setup-surface">
+        <div class="overlay-head">
+          <div>
+            <span class="panel-kicker">New position</span>
+            <h2 id="new-game-title">Choose your side</h2>
+          </div>
+          <button id="setup-close" class="icon-button" type="button" aria-label="Close new game setup" title="Close new game setup">
+            <span aria-hidden="true">&#10005;</span>
+          </button>
+        </div>
+        <div class="setup-section">
+          <span class="setup-label">Play as</span>
+          <div class="color-picker" role="group" aria-label="Choose your color">
+            <button class="color-button active" data-color="w" type="button">White</button>
+            <button class="color-button" data-color="random" type="button">Random</button>
+            <button class="color-button" data-color="b" type="button">Black</button>
+          </div>
+        </div>
+        <div class="setup-section setup-level">
+          <span class="setup-label">Stockfish level</span>
+          <span id="setup-level-label" class="setup-value">Level 4 &middot; 200 ms</span>
+        </div>
+        <div class="setup-actions">
+          <button id="start-game" class="compact-button primary" type="button">Start Game</button>
+          <button id="setup-settings" class="compact-button secondary" type="button">Settings</button>
+        </div>
+      </div>
+    </section>
+
     <div id="toast" class="toast" aria-live="polite"></div>
   </body>
 </html>
