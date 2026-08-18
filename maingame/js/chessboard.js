@@ -102,20 +102,64 @@ class StockfishEngine {
     const supportsWasm =
       typeof WebAssembly === "object" &&
       WebAssembly.validate(Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00));
-    const workerUrl = new URL(
-      supportsWasm ? "./engines/stockfish.wasm.js" : "./engines/stockfish.js",
-      import.meta.url
-    );
-    this.worker = new Worker(workerUrl);
+    this.workerSources = supportsWasm
+      ? ["./engines/stockfish.wasm.js", "./engines/stockfish.js"]
+      : ["./engines/stockfish.js"];
+    this.worker = null;
     this.queue = Promise.resolve();
-    this.initPromise = new Promise((resolve) => {
-      this.initResolver = resolve;
-    });
     this.currentTask = null;
     this.options = {};
     this.readySent = false;
-    this.worker.addEventListener("message", this.handleMessage.bind(this));
-    this.worker.postMessage("uci");
+    this.initPromise = this.initialize();
+  }
+
+  async initialize() {
+    let lastError = null;
+    for (const source of this.workerSources) {
+      try {
+        await this.startWorker(source);
+        return;
+      } catch (error) {
+        lastError = error;
+        this.worker?.terminate();
+        this.worker = null;
+      }
+    }
+    throw lastError || new Error("No Stockfish worker could be started.");
+  }
+
+  startWorker(source) {
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(new URL(source, import.meta.url));
+      let settled = false;
+      const timeoutId = window.setTimeout(() => {
+        fail(new Error(`Stockfish worker timed out while loading (${source}).`));
+      }, 15000);
+      const cleanup = () => {
+        window.clearTimeout(timeoutId);
+        this.initResolver = null;
+      };
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error instanceof Error ? error : new Error(`Stockfish worker failed to load (${source}).`));
+      };
+
+      this.worker = worker;
+      this.readySent = false;
+      this.options = {};
+      this.initResolver = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      worker.addEventListener("message", this.handleMessage.bind(this));
+      worker.addEventListener("error", (event) => fail(event.error || event), { once: true });
+      worker.addEventListener("messageerror", () => fail(new Error(`Stockfish worker message failed (${source}).`)), { once: true });
+      worker.postMessage("uci");
+    });
   }
 
   handleMessage(event) {
@@ -147,7 +191,6 @@ class StockfishEngine {
 
     if (this.initResolver && line === "readyok") {
       const resolve = this.initResolver;
-      this.initResolver = null;
       resolve();
       return;
     }
@@ -1157,8 +1200,9 @@ async function init() {
 
   try {
     state.opponentEngine = new StockfishEngine();
+    await state.opponentEngine.ready();
     state.analysisEngine = new StockfishEngine();
-    await Promise.all([state.opponentEngine.ready(), state.analysisEngine.ready()]);
+    await state.analysisEngine.ready();
     state.engineReady = true;
     setBusy(false);
     setStatus("Engine ready.");
