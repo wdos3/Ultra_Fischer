@@ -1052,9 +1052,25 @@ body.eval-hidden .board-row {
   min-width: 0;
 }
 
+.record-item-title-row {
+  align-items: center;
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+}
+
 .record-item-title {
   font-size: 13px;
   font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.record-title-action {
+  flex: 0 0 26px;
+  font-size: 15px;
+  height: 26px;
+  min-width: 26px;
 }
 
 .record-item-detail,

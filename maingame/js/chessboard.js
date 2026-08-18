@@ -627,6 +627,32 @@ function makeEditButton(action, id) {
   return button;
 }
 
+function makeFavoriteButton(record) {
+  const button = document.createElement("button");
+  button.className = "icon-button record-title-action favorite-button";
+  button.type = "button";
+  button.innerHTML = record.isFavorite ? "&#9733;" : "&#9734;";
+  button.title = record.isFavorite ? "Remove favorite" : "Favorite game";
+  button.setAttribute("aria-label", record.isFavorite ? "Remove favorite" : "Favorite game");
+  button.dataset.recordAction = "favorite";
+  button.dataset.recordId = record.id;
+  return button;
+}
+
+function appendRecordTitle(main, record) {
+  const titleRow = document.createElement("div");
+  titleRow.className = "record-item-title-row";
+  const title = document.createElement("strong");
+  title.className = "record-item-title";
+  title.textContent = record.label || `Game ${formatDate(record.startedAt)}`;
+  titleRow.append(title, makeEditButton("rename", record.id), makeFavoriteButton(record));
+  main.appendChild(titleRow);
+}
+
+function resultCodeForRecord(record) {
+  return record.result === "draw" ? "1/2-1/2" : record.result === "win" ? (record.playerColor === "w" ? "1-0" : "0-1") : record.result === "loss" ? (record.playerColor === "w" ? "0-1" : "1-0") : "*";
+}
+
 function recordStatusLabel(record) {
   if (record.status === "terminated") {
     return "Terminated";
@@ -651,24 +677,19 @@ function renderHistoryList(games) {
     item.className = "record-item";
     const main = document.createElement("div");
     main.className = "record-item-main";
-    const title = document.createElement("strong");
-    title.className = "record-item-title";
-    title.textContent = record.label || `Game ${formatDate(record.startedAt)}`;
+    appendRecordTitle(main, record);
     const detail = document.createElement("span");
     detail.className = "record-item-detail";
-    detail.textContent = `${sideName(record.playerColor)} vs Level ${record.stockfishLevel} · ${formatDate(record.updatedAt)} · ${record.moveCount || 0} moves${record.isFavorite ? " · Favorite" : ""}`;
+    detail.textContent = `${sideName(record.playerColor)} vs Level ${record.stockfishLevel} · ${formatDate(record.updatedAt)} · ${record.moveCount || 0} moves`;
     const meta = document.createElement("span");
     meta.className = "record-item-meta";
     meta.textContent = record.status === "terminated" && record.termination && record.termination !== "new_game"
       ? `${recordStatusLabel(record)} · ${record.termination.replaceAll("_", " ")}`
       : recordStatusLabel(record);
-    main.append(title, detail, meta);
+    main.append(detail, meta);
     const actions = document.createElement("div");
     actions.className = "record-item-actions";
-    actions.appendChild(makeEditButton("rename", record.id));
-    const favorite = makeButton(record.isFavorite ? "Unfavorite" : "Favorite", "favorite", record.id);
-    favorite.classList.add("favorite-button");
-    actions.appendChild(favorite);
+    actions.appendChild(makeButton("Copy PGN", "copy-pgn", record.id));
     if (record.status === "in_progress") actions.appendChild(makeButton("Resume", "resume", record.id));
     actions.appendChild(makeButton("Replay", "replay", record.id));
     actions.appendChild(makeButton("Play Again", "again", record.id));
@@ -703,24 +724,20 @@ function renderFavoritesList(games) {
     item.className = "record-item";
     const main = document.createElement("div");
     main.className = "record-item-main";
-    const title = document.createElement("strong");
-    title.className = "record-item-title";
-    title.textContent = record.label || `Game ${formatDate(record.startedAt)}`;
+    appendRecordTitle(main, record);
     const detail = document.createElement("span");
     detail.className = "record-item-detail";
     detail.textContent = `${sideName(record.playerColor)} vs Level ${record.stockfishLevel} · ${formatDate(record.updatedAt)} · ${record.moveCount || 0} moves`;
     const meta = document.createElement("span");
     meta.className = "record-item-meta";
     meta.textContent = `${recordStatusLabel(record)} · PGN ready to copy`;
-    main.append(title, detail, meta);
+    main.append(detail, meta);
     const actions = document.createElement("div");
     actions.className = "record-item-actions";
-    actions.appendChild(makeEditButton("rename", record.id));
     actions.appendChild(makeButton("Copy PGN", "copy-pgn", record.id));
     if (record.status === "in_progress") actions.appendChild(makeButton("Resume", "resume", record.id));
     actions.appendChild(makeButton("Replay", "replay", record.id));
     actions.appendChild(makeButton("Play Again", "again", record.id));
-    actions.appendChild(makeButton("Unfavorite", "favorite", record.id));
     item.append(main, actions);
     ui.favoritesList.appendChild(item);
   }
@@ -1865,7 +1882,7 @@ function bindEvents() {
       const label = window.prompt("Name this game", record.label || `Game ${formatDate(record.startedAt)}`);
       if (label?.trim()) {
         const renamed = await renameGame(record.id, label);
-      if (record.id === state.currentGameId && renamed) state.currentGameLabel = renamed.label;
+        if (record.id === state.currentGameId && renamed) state.currentGameLabel = renamed.label;
       }
       await refreshHistoryList();
       await refreshFavoritesList();
@@ -1875,6 +1892,10 @@ function bindEvents() {
       await setGameFavorite(record.id, !record.isFavorite);
       if (record.id === state.currentGameId) state.currentGameFavorite = !record.isFavorite;
       await refreshFavoritesList();
+    }
+    if (action === "copy-pgn") {
+      await copyPgn(record.pgn || buildPgn(record.startingFen, record.moves || [], resultCodeForRecord(record)));
+      return;
     }
     if (action === "delete" && window.confirm("Delete this local game record?")) {
       await deleteGame(record.id);
@@ -1904,8 +1925,7 @@ function bindEvents() {
       return;
     }
     if (action === "copy-pgn") {
-      const resultCode = record.result === "draw" ? "1/2-1/2" : record.result === "win" ? (record.playerColor === "w" ? "1-0" : "0-1") : record.result === "loss" ? (record.playerColor === "w" ? "0-1" : "1-0") : "*";
-      await copyPgn(record.pgn || buildPgn(record.startingFen, record.moves || [], resultCode));
+      await copyPgn(record.pgn || buildPgn(record.startingFen, record.moves || [], resultCodeForRecord(record)));
       return;
     }
     if (action === "favorite") {
