@@ -36,6 +36,8 @@ const LEGACY_LEVELS = {
   "very-hard": "7",
 };
 
+const EVALUATION_DEPTH = 16;
+
 function normalizeLevel(value) {
   const migratedValue = LEGACY_LEVELS[value] || value;
   return /^[1-8]$/.test(migratedValue) ? migratedValue : "4";
@@ -43,13 +45,11 @@ function normalizeLevel(value) {
 
 const ui = {
   aiStrength: document.getElementById("ai-strength"),
-  aiStrengthDetail: document.getElementById("ai-strength-detail"),
   aboutClose: document.getElementById("about-close"),
   aboutDialog: document.getElementById("about-dialog"),
   aboutToggle: document.getElementById("about-toggle"),
   board: document.getElementById("board"),
   colorButtons: Array.from(document.querySelectorAll(".color-button")),
-  evalDepth: document.getElementById("eval-depth"),
   evalFill: document.getElementById("eval-fill"),
   evalLabel: document.getElementById("eval-label"),
   evalMarker: document.getElementById("eval-marker"),
@@ -90,8 +90,6 @@ const ui = {
   replayPrev: document.getElementById("replay-prev"),
   replayNext: document.getElementById("replay-next"),
   replayLast: document.getElementById("replay-last"),
-  copyPgn: document.getElementById("copy-pgn"),
-  downloadPgn: document.getElementById("download-pgn"),
   hintButton: document.getElementById("hint-button"),
   modePill: document.getElementById("mode-pill"),
   moveAnimation: document.getElementById("move-animation"),
@@ -110,7 +108,6 @@ const ui = {
   resign: document.getElementById("resign"),
   settingsCard: document.getElementById("settings-card"),
   settingsClose: document.getElementById("settings-close"),
-  settingsCaption: document.getElementById("settings-caption"),
   settingsToggle: document.getElementById("settings-toggle"),
   sharePosition: document.getElementById("share-position"),
   statusText: document.getElementById("status-text"),
@@ -402,7 +399,7 @@ function gameResult() {
 
 function buildPgn(startingFen, moves, resultCode = "*") {
   const replay = new Chess(startingFen);
-  replay.header("Event", "Ultra_Fischer", "SetUp", "1", "FEN", startingFen, "Result", resultCode);
+  replay.header("Event", "Ultra Fischer", "SetUp", "1", "FEN", startingFen, "Result", resultCode);
   for (const san of moves) {
     if (!replay.move(san)) {
       break;
@@ -557,7 +554,6 @@ function setCurrentRecord(record) {
 function syncTheme() {
   document.body.dataset.theme = state.theme;
   ui.themeToggle.textContent = state.theme === "dark" ? "Light" : "Dark";
-  ui.settingsCaption.textContent = `${state.theme === "dark" ? "Dark" : "Light"} interface`;
   if (state.board) {
     state.board.resize();
   }
@@ -583,7 +579,6 @@ function syncSettingsUI() {
   ui.positionDepth.value = String(state.positionDepth);
   ui.moveAnimation.value = state.moveAnimation;
   ui.aiStrength.value = state.aiStrength;
-  ui.aiStrengthDetail.textContent = `Depth ${level.depth} · ${level.moveTime} ms search`;
   ui.setupLevelLabel.textContent = `Level ${state.aiStrength} · ${level.moveTime} ms`;
   ui.opponentLabel.textContent = state.playerVsPlayer
     ? "Local opponent"
@@ -906,8 +901,23 @@ function updateSideLabels() {
   ui.recordTurn.textContent = turn;
 }
 
+function renderMoveCell(cell, move) {
+  if (!move) {
+    return;
+  }
+  const image = document.createElement("img");
+  image.className = "move-piece-icon";
+  image.src = `maingame/img/chesspieces/wikipedia/${move.color === "w" ? "w" + move.piece.toUpperCase() : "b" + move.piece}.png`;
+  image.alt = "";
+  image.setAttribute("aria-hidden", "true");
+  image.title = move.san;
+  const san = document.createElement("span");
+  san.textContent = move.san;
+  cell.append(image, san);
+}
+
 function renderMoveHistory() {
-  const moves = game.history();
+  const moves = game.history({ verbose: true });
   ui.moveHistory.innerHTML = "";
 
   if (moves.length === 0) {
@@ -928,11 +938,10 @@ function renderMoveHistory() {
 
     const white = document.createElement("span");
     white.className = "move-cell";
-    white.textContent = moves[i] || "";
-
     const black = document.createElement("span");
     black.className = "move-cell";
-    black.textContent = moves[i + 1] || "";
+    renderMoveCell(white, moves[i]);
+    renderMoveCell(black, moves[i + 1]);
 
     row.appendChild(number);
     row.appendChild(white);
@@ -984,7 +993,6 @@ function updateEvalBar(score) {
   const ratio = scoreToRatio(score);
   const percent = ratio * 100;
   ui.evalLabel.textContent = formatEvalLabel(score);
-  ui.evalDepth.textContent = score ? `Depth ${score.depth || "--"}` : "Depth --";
 
   if (window.matchMedia("(max-width: 900px)").matches) {
     ui.evalFill.style.width = `${percent}%`;
@@ -999,7 +1007,7 @@ function updateEvalBar(score) {
   }
 }
 
-async function refreshEvaluation(depth = 8) {
+async function refreshEvaluation(depth = EVALUATION_DEPTH) {
   if (!state.evalVisible || !state.engineReady) {
     return;
   }
@@ -1008,7 +1016,7 @@ async function refreshEvaluation(depth = 8) {
   const result = await state.analysisEngine.search(game.fen(), {
     ...ANALYSIS_PROFILE,
     depth,
-    moveTime: Math.max(250, Math.min(700, depth * 45)),
+    moveTime: Math.max(700, Math.min(1400, depth * 70)),
   });
   if (token !== state.taskToken) {
     return;
@@ -1109,20 +1117,6 @@ async function copyPgn(pgn) {
   }
 }
 
-async function copyCurrentPgn() {
-  await copyPgn(buildPgn(state.currentStartingFen || game.fen(), game.history(), gameResult().resultCode));
-}
-
-function downloadCurrentPgn() {
-  const pgn = buildPgn(state.currentStartingFen || game.fen(), game.history(), gameResult().resultCode);
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(new Blob([pgn], { type: "application/x-chess-pgn" }));
-  link.download = `Ultra_Fischer-${new Date().toISOString().slice(0, 10)}.pgn`;
-  link.click();
-  URL.revokeObjectURL(link.href);
-  showToast("PGN download started.");
-}
-
 async function showHint() {
   if (!state.engineReady) {
     showToast("Engine is still loading.");
@@ -1193,7 +1187,7 @@ async function runComputerTurn(token) {
   } else {
     setStatus(describeResult());
   }
-  await refreshEvaluation(8);
+  await refreshEvaluation();
 }
 
 function getRandomPosition(start, end, exclusions) {
@@ -1477,7 +1471,7 @@ async function startNewGame() {
     const evaluationToken = state.taskToken;
     window.setTimeout(() => {
       if (evaluationToken === state.taskToken && !state.isBusy) {
-        void refreshEvaluation(Math.min(8, Math.max(6, state.positionDepth)));
+        void refreshEvaluation();
       }
     }, 900);
   } finally {
@@ -1637,7 +1631,7 @@ async function afterMove() {
 
   if (game.game_over()) {
     await finishMatch(describeResult());
-    await refreshEvaluation(8);
+    await refreshEvaluation();
     return;
   }
 
@@ -1655,7 +1649,7 @@ async function afterMove() {
   }
 
   setStatus(describeResult());
-  await refreshEvaluation(8);
+  await refreshEvaluation();
 }
 
 function createBoard() {
@@ -1800,7 +1794,7 @@ function bindEvents() {
     renderMoveHistory();
     setStatus(describeResult());
     void persistCurrentGameQuietly();
-    await refreshEvaluation(8);
+    await refreshEvaluation();
   });
 
   ui.resign.addEventListener("click", () => {
@@ -1810,12 +1804,6 @@ function bindEvents() {
   ui.sharePosition.addEventListener("click", () => {
     void copyCurrentFen();
   });
-
-  ui.copyPgn.addEventListener("click", () => {
-    void copyCurrentPgn();
-  });
-
-  ui.downloadPgn.addEventListener("click", downloadCurrentPgn);
 
   ui.hintButton.addEventListener("click", () => {
     void showHint();
@@ -1837,7 +1825,7 @@ function bindEvents() {
     syncModeUI();
     syncSettingsUI();
     setStatus(describeResult());
-    await refreshEvaluation(8);
+    await refreshEvaluation();
   });
 
   ui.themeToggle.addEventListener("click", () => {
@@ -1985,7 +1973,7 @@ function bindEvents() {
   ui.replayPrev.addEventListener("click", () => { state.replay.index = Math.max(0, state.replay.index - 1); renderReplay(); });
   ui.replayNext.addEventListener("click", () => { state.replay.index = Math.min(state.replay.record?.moves?.length || 0, state.replay.index + 1); renderReplay(); });
   ui.replayLast.addEventListener("click", () => { state.replay.index = state.replay.record?.moves?.length || 0; renderReplay(); });
-  ui.exportData.addEventListener("click", async () => { try { const backup = await exportBackup(); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" })); link.download = `Ultra_Fischer-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); showToast("Backup exported."); } catch (error) { console.error(error); showToast("Could not export local data."); } });
+  ui.exportData.addEventListener("click", async () => { try { const backup = await exportBackup(); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" })); link.download = `Ultra-Fischer-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); showToast("Backup exported."); } catch (error) { console.error(error); showToast("Could not export local data."); } });
   ui.importData.addEventListener("click", () => ui.importFile.click());
   ui.importFile.addEventListener("change", async () => { const file = ui.importFile.files?.[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) { showToast("Backup is larger than 5 MB."); return; } try { const backup = JSON.parse(await file.text()); const replace = window.confirm("Press OK to replace local data, or Cancel to merge this backup."); await importBackup(backup, replace ? "replace" : "merge"); showToast("Backup imported."); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); } catch (error) { console.error(error); showToast(error.message || "Could not import backup."); } finally { ui.importFile.value = ""; } });
   ui.clearHistory.addEventListener("click", async () => { if (window.confirm("Clear all local game history?")) { await clearGames(); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); showToast("Game history cleared."); } });
@@ -2012,7 +2000,7 @@ function bindEvents() {
     void persistPreferences();
     syncEvalVisibility();
     if (state.evalVisible) {
-      await refreshEvaluation(8);
+      await refreshEvaluation();
     }
   });
 
@@ -2021,7 +2009,7 @@ function bindEvents() {
     void persistPreferences();
     syncEvalVisibility();
     if (state.evalVisible) {
-      await refreshEvaluation(8);
+      await refreshEvaluation();
     }
   });
 
@@ -2043,7 +2031,7 @@ function bindEvents() {
     state.aiStrength = normalizeLevel(ui.aiStrength.value);
     void persistPreferences();
     syncSettingsUI();
-    await refreshEvaluation(8);
+    await refreshEvaluation();
   });
 
   document.addEventListener("keydown", (event) => {

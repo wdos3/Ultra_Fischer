@@ -1,6 +1,6 @@
-# Ultra_Fischer
+# Ultra Fischer
 
-Ultra_Fischer is randomized chess with a local-first game archive. Positions are generated in the browser and evaluated by the bundled Stockfish workers.
+Ultra Fischer is randomized chess with a local-first game archive. Positions are generated in the browser and evaluated by the bundled Stockfish workers.
 
 ## Local data
 
