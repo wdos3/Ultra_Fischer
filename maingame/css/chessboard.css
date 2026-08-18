@@ -317,7 +317,7 @@ a:focus-visible {
 }
 
 .eval-shell {
-  background: #171512;
+  background: #000;
   border: 1px solid var(--border-strong);
   height: 100%;
   overflow: hidden;
@@ -333,11 +333,13 @@ a:focus-visible {
 }
 
 .eval-fill {
-  background: #f0ede4;
+  background: #fff;
   bottom: 0;
   height: 50%;
   left: 50%;
   position: absolute;
+  transition: bottom 240ms cubic-bezier(0.22, 1, 0.36, 1), height 240ms cubic-bezier(0.22, 1, 0.36, 1), left 240ms cubic-bezier(0.22, 1, 0.36, 1), width 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: bottom, height, left, width;
   width: 100%;
 }
 
@@ -347,6 +349,8 @@ a:focus-visible {
   height: 4px;
   left: 0;
   position: absolute;
+  transition: bottom 240ms cubic-bezier(0.22, 1, 0.36, 1), left 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: bottom, left;
   width: 100%;
 }
 

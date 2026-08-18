@@ -185,6 +185,7 @@ class StockfishEngine {
     this.currentTask = null;
     this.options = {};
     this.readySent = false;
+    this.generation = 0;
     this.initPromise = this.initialize();
   }
 
@@ -324,15 +325,31 @@ class StockfishEngine {
     return this.initPromise;
   }
 
+  cancelPending() {
+    this.generation += 1;
+    this.worker?.postMessage("stop");
+    if (this.currentTask) {
+      const task = this.currentTask;
+      this.currentTask = null;
+      task.resolve({ bestMove: null, score: null, config: task.config, cancelled: true });
+    }
+    this.queue = Promise.resolve();
+  }
+
   search(fen, profile) {
     const config = resolveEngineDifficulty(profile, this.options);
+    const generation = this.generation;
     this.queue = this.queue.then(
-      () =>
-        new Promise((resolve) => {
+      () => {
+        if (generation !== this.generation || !this.worker) {
+          return { bestMove: null, score: null, config, cancelled: true };
+        }
+        return new Promise((resolve) => {
           this.currentTask = {
             depth: 0,
             candidates: new Map(),
             config,
+            generation,
             resolve,
             score: null,
           };
@@ -354,7 +371,8 @@ class StockfishEngine {
           }
           this.worker.postMessage(`position fen ${fen}`);
           this.worker.postMessage(`go depth ${config.depth} movetime ${config.moveTime}`);
-        })
+        });
+      }
     );
     return this.queue;
   }
@@ -559,6 +577,7 @@ function setCurrentRecord(record) {
   updateSideLabels();
   renderMoveHistory();
   updateEvalBar(record.finalEvaluation || record.initialEvaluation || null);
+  syncActionAvailability();
   setStatus(state.matchOver ? describeResult() : describeResult());
 }
 
@@ -884,15 +903,29 @@ function syncModeUI() {
 
 function setBusy(isBusy) {
   state.isBusy = isBusy;
-  ui.undo.disabled = isBusy;
-  ui.hintButton.disabled = isBusy;
+  syncActionAvailability();
   ui.startGame.disabled = isBusy;
   ui.colorButtons.forEach((button) => {
     button.disabled = isBusy;
   });
 }
 
+function syncActionAvailability() {
+  const terminal = state.matchOver || game.game_over();
+  const blocked = state.isBusy || terminal;
+  ui.undo.disabled = blocked;
+  ui.hintButton.disabled = blocked;
+}
+
+function cancelEngineSearches() {
+  new Set([state.analysisEngine, state.opponentEngine].filter(Boolean)).forEach((engine) => {
+    engine.cancelPending();
+  });
+}
+
 async function finishMatch(message, overrides = {}) {
+  state.taskToken += 1;
+  cancelEngineSearches();
   state.matchOver = true;
   setBusy(false);
   setStatus(message);
@@ -1023,7 +1056,7 @@ function updateEvalBar(score) {
 }
 
 async function refreshEvaluation(depth = EVALUATION_DEPTH) {
-  if (!state.evalVisible || !state.engineReady) {
+  if (!state.evalVisible || !state.engineReady || state.matchOver || game.game_over()) {
     return;
   }
 
@@ -1034,6 +1067,9 @@ async function refreshEvaluation(depth = EVALUATION_DEPTH) {
     moveTime: Math.max(700, Math.min(1400, depth * 70)),
   });
   if (token !== state.taskToken) {
+    return;
+  }
+  if (result.cancelled) {
     return;
   }
   updateEvalBar(normalizeScoreForWhite(result.score, game.turn()));
@@ -1133,6 +1169,9 @@ async function copyPgn(pgn) {
 }
 
 async function showHint() {
+  if (state.isBusy || state.matchOver || game.game_over()) {
+    return;
+  }
   if (!state.engineReady) {
     showToast("Engine is still loading.");
     return;
@@ -1146,6 +1185,9 @@ async function showHint() {
     moveTime: 550,
   });
   if (token !== state.taskToken) {
+    return;
+  }
+  if (result.cancelled) {
     return;
   }
 
@@ -1173,14 +1215,14 @@ function describeResult() {
 }
 
 async function runComputerTurn(token) {
-  if (state.playerVsPlayer || game.game_over()) {
+  if (state.playerVsPlayer || state.matchOver || game.game_over() || token !== state.taskToken) {
     return;
   }
 
   const level = getLevelConfig(state.aiStrength);
   setStatus(`Stockfish Level ${state.aiStrength} is thinking...`);
   const result = await state.opponentEngine.search(game.fen(), level);
-  if (token !== state.taskToken || state.playerVsPlayer) {
+  if (token !== state.taskToken || result.cancelled || state.playerVsPlayer || state.matchOver || game.game_over()) {
     return;
   }
 
@@ -1462,6 +1504,7 @@ async function startNewGame() {
   }
 
   const token = ++state.taskToken;
+  cancelEngineSearches();
   setBusy(true);
   updateEvalBar(null);
 
@@ -1482,6 +1525,10 @@ async function startNewGame() {
   setStatus(state.pendingStartFen ? "Loading favorite game..." : "Preparing a randomized position...");
 
   try {
+    await terminateCurrentGame();
+    if (token !== state.taskToken) {
+      return;
+    }
     const candidate = state.pendingStartFen
       ? { fen: state.pendingStartFen, score: null }
       : await generateBalancedPosition(actualColor, token);
@@ -1492,10 +1539,6 @@ async function startNewGame() {
       return;
     }
 
-    await terminateCurrentGame();
-    if (token !== state.taskToken) {
-      return;
-    }
     state.matchOver = false;
     game.load(candidate.fen);
     state.pendingStartFen = null;
@@ -1845,6 +1888,10 @@ function bindEvents() {
   });
 
   ui.undo.addEventListener("click", async () => {
+    if (state.isBusy || state.matchOver || game.game_over()) {
+      return;
+    }
+    cancelEngineSearches();
     const movesToUndo = state.playerVsPlayer ? 1 : 2;
     for (let count = 0; count < movesToUndo; count += 1) {
       if (!game.undo()) {
@@ -1854,6 +1901,7 @@ function bindEvents() {
     state.board.position(game.fen(), false);
     state.taskToken += 1;
     state.matchOver = false;
+    syncActionAvailability();
     updateSideLabels();
     renderMoveHistory();
     setStatus(describeResult());
