@@ -52,6 +52,7 @@ afterEach(() => {
 test("normalizes email and enforces long passwords", () => {
   assert.equal(auth.normalizeEmail("  PLAYER@Example.COM "), "player@example.com");
   assert.equal(auth.normalizeEmail("opcleaver0@\u200Bgmail.com"), "opcleaver0@gmail.com");
+  assert.equal(auth.normalizeEmail("letrilam2001@\u2063gmail.com"), "letrilam2001@gmail.com");
   assert.equal(auth.validatePassword("short"), "Use a password with at least 8 characters.");
   assert.equal(auth.validatePassword("a".repeat(8)), "");
   assert.equal(auth.validatePassword("a".repeat(33)), "Use a password with no more than 32 characters.");

@@ -154,7 +154,7 @@ function notify(message) {
 function validationMessage(form) {
   const invalid = form.querySelector(":invalid");
   if (!invalid) return "";
-  if (invalid.type === "email") return "Enter a valid email address.";
+  if (invalid.name === "email") return "Enter a valid email address.";
   if (invalid.name === "password" && invalid.validity.tooShort) return "Use a password with at least 8 characters.";
   if (invalid.name === "password" && invalid.validity.tooLong) return "Use a password with no more than 32 characters.";
   if (invalid.name === "code") return "Enter the 6-digit verification code.";
@@ -196,7 +196,7 @@ async function handleRecoveryLink() {
 
 async function submitForm(form, handler) {
   const emailInput = form.querySelector('input[type="email"]');
-  if (emailInput) emailInput.value = emailInput.value.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").trim();
+  if (emailInput) emailInput.value = emailInput.value.replace(/[\p{Cc}\p{Cf}\p{White_Space}]/gu, "").trim();
   setStatus("");
   if (!form.reportValidity()) {
     const message = validationMessage(form);

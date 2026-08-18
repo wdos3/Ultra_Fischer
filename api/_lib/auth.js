@@ -59,7 +59,7 @@ function getConfig() {
 
 function normalizeEmail(value) {
   return typeof value === "string"
-    ? value.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").trim().toLowerCase()
+    ? value.replace(/[\p{Cc}\p{Cf}\p{White_Space}]/gu, "").trim().toLowerCase()
     : "";
 }
 
