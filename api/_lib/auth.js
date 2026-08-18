@@ -348,7 +348,12 @@ async function register(req, res) {
   }
   await enforceRateLimit(req, "register", email);
   const result = await providerRequest("/auth/v1/signup", { method: "POST", body: { email, password } });
-  if (!result.ok && result.status >= 500) throw new ConfigError("The authentication provider is unavailable.");
+  if (!result.ok && result.status >= 500) {
+    if (providerMessage(result).includes("error sending confirmation email")) {
+      throw new HttpError(502, "We could not send the confirmation email. Check the project's email delivery settings and try again.", "email_delivery_failed");
+    }
+    throw new ConfigError("The authentication provider is unavailable.");
+  }
   if (!result.ok && result.status !== 400 && result.status !== 422) {
     throw new HttpError(502, GENERIC_MESSAGE, "provider_error");
   }
