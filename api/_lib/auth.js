@@ -156,8 +156,11 @@ function sendError(res, error) {
 
 function assertSameOrigin(req) {
   const origin = req.headers.origin;
+  if (!origin) {
+    throw new HttpError(403, "Request origin not allowed.", "origin_not_allowed");
+  }
   const config = getConfig();
-  if (!origin || !config.allowedOrigins.has(origin)) {
+  if (!config.allowedOrigins.has(origin)) {
     throw new HttpError(403, "Request origin not allowed.", "origin_not_allowed");
   }
 }
