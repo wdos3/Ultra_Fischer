@@ -113,7 +113,6 @@ const ui = {
   recordColor: document.getElementById("record-color"),
   recordTurn: document.getElementById("record-turn"),
   positionDepth: document.getElementById("position-depth"),
-  promotionClose: document.getElementById("promotion-close"),
   promotionDetail: document.getElementById("promotion-detail"),
   promotionDialog: document.getElementById("promotion-dialog"),
   promotionOptions: document.getElementById("promotion-options"),
@@ -1544,12 +1543,34 @@ function closePromotionDialog() {
   closeOverlay(ui.promotionDialog);
 }
 
+function positionPromotionPicker(target) {
+  const square = document.querySelector(`#board .square-${target}`);
+  if (!square || !ui.promotionDialog) return;
+  const rect = square.getBoundingClientRect();
+  const size = Math.max(48, Math.min(88, rect.width * 0.82));
+  const gap = Math.max(3, Math.round(size * 0.05));
+  const pickerHeight = size * 4 + gap * 3;
+  const startsBelow = rect.top < window.innerHeight / 2;
+  const top = Math.max(8, Math.min(
+    startsBelow ? rect.top : rect.bottom - pickerHeight,
+    window.innerHeight - pickerHeight - 8,
+  ));
+  const left = Math.max(8, Math.min(
+    rect.left + (rect.width - size) / 2,
+    window.innerWidth - size - 8,
+  ));
+  ui.promotionDialog.style.setProperty("--promotion-left", `${left}px`);
+  ui.promotionDialog.style.setProperty("--promotion-top", `${top}px`);
+  ui.promotionDialog.style.setProperty("--promotion-size", `${size}px`);
+  ui.promotionDialog.style.setProperty("--promotion-gap", `${gap}px`);
+}
+
 function openPromotionDialog(source, target) {
   const piece = game.get(source);
   if (!piece) return;
   state.promotionRequest = { source, target, renderImmediately: true };
   ui.promotionDetail.textContent = `${sideName(piece.color)} pawn promotion. Choose a piece.`;
-  const pieceCode = (letter) => piece.color === "w" ? letter.toUpperCase() : letter;
+  const pieceCode = (letter) => `${piece.color}${letter.toUpperCase()}`;
   ui.promotionOptions.querySelectorAll("[data-piece]").forEach((button) => {
     const letter = button.dataset.piece;
     const image = button.querySelector("img");
@@ -1557,6 +1578,7 @@ function openPromotionDialog(source, target) {
     image.alt = `${letter === "q" ? "Queen" : letter === "n" ? "Knight" : letter === "r" ? "Rook" : "Bishop"} promotion`;
   });
   openOverlay(ui.promotionDialog);
+  positionPromotionPicker(target);
 }
 
 function choosePromotion(piece) {
@@ -1768,6 +1790,9 @@ function createBoard() {
       resizeFrame = requestAnimationFrame(() => {
         state.board.resize();
         updateEvalBar(state.lastEvalScore);
+        if (state.promotionRequest) {
+          positionPromotionPicker(state.promotionRequest.target);
+        }
       });
     });
     state.resizeBound = true;
@@ -1999,7 +2024,6 @@ function bindEvents() {
     }
   });
   ui.resumeClose.addEventListener("click", () => closeOverlay(ui.resumeDialog));
-  ui.promotionClose.addEventListener("click", () => closePromotionDialog());
   ui.promotionOptions.addEventListener("click", (event) => {
     const button = event.target.closest("[data-piece]");
     if (button) choosePromotion(button.dataset.piece);

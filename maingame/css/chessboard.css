@@ -616,40 +616,71 @@ a:focus-visible {
   margin-bottom: 0;
 }
 
+.sr-only {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.promotion-overlay {
+  background: rgba(8, 7, 6, 0.68);
+  display: block;
+  inset: 0;
+  position: fixed;
+  z-index: 25;
+}
+
+.promotion-overlay.hidden {
+  display: none !important;
+}
+
 .promotion-surface {
-  max-width: 520px;
+  left: var(--promotion-left, 8px);
+  padding: 0;
+  position: fixed;
+  top: var(--promotion-top, 8px);
+  width: var(--promotion-size, 64px);
+  z-index: 26;
 }
 
 .promotion-options {
   display: grid;
-  gap: 7px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--promotion-gap, 4px);
+  grid-template-columns: 1fr;
 }
 
 .promotion-button {
   align-items: center;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  color: var(--muted);
+  aspect-ratio: 1;
+  background: rgba(238, 235, 227, 0.94);
+  border: 1px solid rgba(20, 18, 15, 0.35);
+  border-radius: 50%;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.34);
   cursor: pointer;
   display: flex;
-  flex-direction: column;
-  gap: 5px;
   justify-content: center;
-  min-height: 116px;
-  padding: 8px;
+  padding: 5px;
+  transition: background-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 
-.promotion-button:hover {
-  background: var(--bg-hover);
-  border-color: var(--accent);
-  color: var(--text);
+.promotion-button:hover,
+.promotion-button:focus-visible {
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.46);
+  outline: none;
+  transform: scale(1.06);
 }
 
 .promotion-button img {
-  height: 68px;
+  height: 100%;
   object-fit: contain;
-  width: 68px;
+  width: 100%;
 }
 
 .overlay-head {
