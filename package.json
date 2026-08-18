@@ -1,5 +1,5 @@
 {
-  "name": "ultra-fischer",
+  "name": "ultra_fischer",
   "private": true,
   "scripts": {
     "test": "node --test maingame/js/storage.test.mjs maingame/js/stockfish-config.test.mjs maingame/js/position-utils.test.mjs",

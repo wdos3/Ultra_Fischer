@@ -1,11 +1,11 @@
-# Ultra Fischer
+# Ultra_Fischer
 
-Ultra Fischer is randomized chess with a local-first game archive. Positions are generated in the browser and evaluated by the bundled Stockfish workers.
+Ultra_Fischer is randomized chess with a local-first game archive. Positions are generated in the browser and evaluated by the bundled Stockfish workers.
 
 ## Local data
 
-- Game records, unfinished games, favorites, saved positions, replays, and statistics use IndexedDB in a versioned `ultra-fischer` database.
-- Engine and interface preferences use the namespaced `ultraFischer.preferences` localStorage key.
+- Game records, unfinished games, favorites, saved positions, replays, and statistics use IndexedDB in a versioned `Ultra_Fischer` database.
+- Engine and interface preferences use the namespaced `Ultra_Fischer.preferences` localStorage key.
 - The Data & Storage panel exports and imports a validated JSON backup and provides deliberate clear/delete controls.
 - No account, email address, remote game API, or cloud sync is required.
 

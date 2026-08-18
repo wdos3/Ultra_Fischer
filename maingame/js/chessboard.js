@@ -406,7 +406,7 @@ function gameResult() {
 
 function buildPgn(startingFen, moves, resultCode = "*") {
   const replay = new Chess(startingFen);
-  replay.header("Event", "Ultra Fischer", "SetUp", "1", "FEN", startingFen, "Result", resultCode);
+  replay.header("Event", "Ultra_Fischer", "SetUp", "1", "FEN", startingFen, "Result", resultCode);
   for (const san of moves) {
     if (!replay.move(san)) {
       break;
@@ -1071,7 +1071,7 @@ function downloadCurrentPgn() {
   const pgn = buildPgn(state.currentStartingFen || game.fen(), game.history(), gameResult().resultCode);
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob([pgn], { type: "application/x-chess-pgn" }));
-  link.download = `ultra-fischer-${new Date().toISOString().slice(0, 10)}.pgn`;
+  link.download = `Ultra_Fischer-${new Date().toISOString().slice(0, 10)}.pgn`;
   link.click();
   URL.revokeObjectURL(link.href);
   showToast("PGN download started.");
@@ -1897,7 +1897,7 @@ function bindEvents() {
   ui.replayPrev.addEventListener("click", () => { state.replay.index = Math.max(0, state.replay.index - 1); renderReplay(); });
   ui.replayNext.addEventListener("click", () => { state.replay.index = Math.min(state.replay.record?.moves?.length || 0, state.replay.index + 1); renderReplay(); });
   ui.replayLast.addEventListener("click", () => { state.replay.index = state.replay.record?.moves?.length || 0; renderReplay(); });
-  ui.exportData.addEventListener("click", async () => { try { const backup = await exportBackup(); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" })); link.download = `ultra-fischer-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); showToast("Backup exported."); } catch (error) { console.error(error); showToast("Could not export local data."); } });
+  ui.exportData.addEventListener("click", async () => { try { const backup = await exportBackup(); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" })); link.download = `Ultra_Fischer-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); showToast("Backup exported."); } catch (error) { console.error(error); showToast("Could not export local data."); } });
   ui.importData.addEventListener("click", () => ui.importFile.click());
   ui.importFile.addEventListener("change", async () => { const file = ui.importFile.files?.[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) { showToast("Backup is larger than 5 MB."); return; } try { const backup = JSON.parse(await file.text()); const replace = window.confirm("Press OK to replace local data, or Cancel to merge this backup."); await importBackup(backup, replace ? "replace" : "merge"); showToast("Backup imported."); await refreshStorageSummary(); await refreshHistoryList(); } catch (error) { console.error(error); showToast(error.message || "Could not import backup."); } finally { ui.importFile.value = ""; } });
   ui.clearHistory.addEventListener("click", async () => { if (window.confirm("Clear all local game history?")) { await clearGames(); await refreshStorageSummary(); await refreshHistoryList(); showToast("Game history cleared."); } });

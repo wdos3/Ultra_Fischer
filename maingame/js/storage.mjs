@@ -1,7 +1,10 @@
-const DB_NAME = "ultra-fischer";
-const DB_VERSION = 1;
-const PREFERENCES_KEY = "ultraFischer.preferences";
-const BACKUP_FORMAT = "ultra-fischer-backup";
+const DB_NAME = "Ultra_Fischer";
+const LEGACY_DB_NAME = "ultra-fischer";
+const DB_VERSION = 2;
+const PREFERENCES_KEY = "Ultra_Fischer.preferences";
+const LEGACY_PREFERENCES_KEY = "ultraFischer.preferences";
+const BACKUP_FORMAT = "Ultra_Fischer-backup";
+const LEGACY_BACKUP_FORMAT = "ultra-fischer-backup";
 const BACKUP_VERSION = 1;
 
 const DEFAULT_PREFERENCES = Object.freeze({
@@ -73,6 +76,82 @@ export function isValidFen(fen) {
   });
 }
 
+function configureObjectStores(database, transaction) {
+  const games = database.objectStoreNames.contains("games")
+    ? transaction.objectStore("games")
+    : database.createObjectStore("games", { keyPath: "id" });
+  for (const index of ["startedAt", "updatedAt", "status", "isFavorite", "stockfishLevel", "playerColor"]) {
+    if (!games.indexNames.contains(index)) {
+      games.createIndex(index, index, { unique: false });
+    }
+  }
+  const positions = database.objectStoreNames.contains("savedPositions")
+    ? transaction.objectStore("savedPositions")
+    : database.createObjectStore("savedPositions", { keyPath: "id" });
+  for (const index of ["createdAt", "fen"]) {
+    if (!positions.indexNames.contains(index)) {
+      positions.createIndex(index, index, { unique: false });
+    }
+  }
+  if (!database.objectStoreNames.contains("meta")) {
+    database.createObjectStore("meta", { keyPath: "id" });
+  }
+}
+
+function openNamedDatabase(name, version) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(name, version);
+    request.addEventListener("upgradeneeded", () => configureObjectStores(request.result, request.transaction));
+    request.addEventListener("success", () => {
+      const database = request.result;
+      database.addEventListener("versionchange", () => database.close());
+      resolve(database);
+    }, { once: true });
+    request.addEventListener("error", () => reject(request.error || new Error(`Could not open ${name} storage.`)), { once: true });
+  });
+}
+
+function readStore(database, storeName) {
+  if (!database.objectStoreNames.contains(storeName)) {
+    return Promise.resolve([]);
+  }
+  const transaction = database.transaction(storeName, "readonly");
+  return requestToPromise(transaction.objectStore(storeName).getAll());
+}
+
+async function migrateLegacyDatabase(database) {
+  if (!database.objectStoreNames.contains("meta")) {
+    return;
+  }
+  const metaTransaction = database.transaction("meta", "readonly");
+  const marker = await requestToPromise(metaTransaction.objectStore("meta").get("legacy-migrated"));
+  if (marker) {
+    return;
+  }
+
+  let legacyDatabase = null;
+  try {
+    const databases = typeof indexedDB.databases === "function" ? await indexedDB.databases() : [];
+    if (!databases.some((entry) => entry.name === LEGACY_DB_NAME)) {
+      return;
+    }
+    legacyDatabase = await openNamedDatabase(LEGACY_DB_NAME, 1);
+    const [games, positions] = await Promise.all([
+      readStore(legacyDatabase, "games"),
+      readStore(legacyDatabase, "savedPositions"),
+    ]);
+    const transaction = database.transaction(["games", "savedPositions", "meta"], "readwrite");
+    games.forEach((game) => transaction.objectStore("games").put(game));
+    positions.forEach((position) => transaction.objectStore("savedPositions").put(position));
+    transaction.objectStore("meta").put({ id: "legacy-migrated", migratedAt: Date.now() });
+    await transactionToPromise(transaction);
+  } catch (error) {
+    console.warn("Legacy local data could not be migrated.", error);
+  } finally {
+    legacyDatabase?.close();
+  }
+}
+
 function openDatabase() {
   if (databasePromise) {
     return databasePromise;
@@ -80,33 +159,9 @@ function openDatabase() {
   if (!globalThis.indexedDB) {
     return Promise.reject(new Error("IndexedDB is unavailable in this browser."));
   }
-  databasePromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.addEventListener("upgradeneeded", () => {
-      const database = request.result;
-      const games = database.objectStoreNames.contains("games")
-        ? request.transaction.objectStore("games")
-        : database.createObjectStore("games", { keyPath: "id" });
-      for (const index of ["startedAt", "updatedAt", "status", "isFavorite", "stockfishLevel", "playerColor"]) {
-        if (!games.indexNames.contains(index)) {
-          games.createIndex(index, index, { unique: false });
-        }
-      }
-      const positions = database.objectStoreNames.contains("savedPositions")
-        ? request.transaction.objectStore("savedPositions")
-        : database.createObjectStore("savedPositions", { keyPath: "id" });
-      for (const index of ["createdAt", "fen"]) {
-        if (!positions.indexNames.contains(index)) {
-          positions.createIndex(index, index, { unique: false });
-        }
-      }
-    });
-    request.addEventListener("success", () => {
-      const database = request.result;
-      database.addEventListener("versionchange", () => database.close());
-      resolve(database);
-    }, { once: true });
-    request.addEventListener("error", () => reject(request.error || new Error("Could not open local game storage.")), { once: true });
+  databasePromise = openNamedDatabase(DB_NAME, DB_VERSION).then(async (database) => {
+    await migrateLegacyDatabase(database);
+    return database;
   });
   return databasePromise;
 }
@@ -122,10 +177,15 @@ async function withStore(storeName, mode, callback) {
 
 function readPreferences() {
   try {
-    const raw = localStorage.getItem(PREFERENCES_KEY);
+    const currentRaw = localStorage.getItem(PREFERENCES_KEY);
+    const legacyRaw = localStorage.getItem(LEGACY_PREFERENCES_KEY);
+    const raw = currentRaw || legacyRaw;
     if (raw) {
       const preferences = { ...DEFAULT_PREFERENCES, ...JSON.parse(raw) };
       preferences.moveAnimation = normalizeMoveAnimation(preferences.moveAnimation);
+      if (!currentRaw) {
+        localStorage.setItem(PREFERENCES_KEY, JSON.stringify(preferences));
+      }
       return preferences;
     }
     const legacy = {
@@ -173,6 +233,7 @@ export function savePreferences(preferences) {
 export function resetPreferences() {
   try {
     localStorage.removeItem(PREFERENCES_KEY);
+    localStorage.removeItem(LEGACY_PREFERENCES_KEY);
     for (const key of ["ultra-fischer-ai-strength", "ultra-fischer-eval-visible", "ultra-fischer-move-animation", "ultra-fischer-position-depth", "ultra-fischer-requested-color", "ultra-fischer-settings-open", "ultra-fischer-theme"]) {
       localStorage.removeItem(key);
     }
@@ -345,8 +406,8 @@ function sanitizeBackupGame(record) {
 }
 
 export function validateBackup(backup) {
-  if (!backup || backup.format !== BACKUP_FORMAT || backup.version !== BACKUP_VERSION || !Array.isArray(backup.games) || !Array.isArray(backup.savedPositions)) {
-    throw new Error("This file is not a valid Ultra Fischer backup.");
+  if (!backup || ![BACKUP_FORMAT, LEGACY_BACKUP_FORMAT].includes(backup.format) || backup.version !== BACKUP_VERSION || !Array.isArray(backup.games) || !Array.isArray(backup.savedPositions)) {
+    throw new Error("This file is not a valid Ultra_Fischer backup.");
   }
   const games = backup.games.map(sanitizeBackupGame).filter(Boolean);
   const savedPositions = backup.savedPositions.map((position) => {
