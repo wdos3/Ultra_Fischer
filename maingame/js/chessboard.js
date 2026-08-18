@@ -4,6 +4,11 @@ import {
   resolveEngineDifficulty,
   selectCandidateMove,
 } from "./stockfish-config.mjs";
+import {
+  areBishopsOnOppositeColors,
+  getBishopPlacementCandidates,
+  getSquareColor,
+} from "./position-utils.mjs";
 
 const STORAGE_KEYS = {
   aiStrength: "ultra-fischer-ai-strength",
@@ -603,17 +608,6 @@ function getRandomPosition(start, end, exclusions) {
 }
 
 function generatePosition(sideToMove) {
-  const darkSquares = [
-    22, 24, 26, 28,
-    31, 33, 35, 37,
-    42, 44, 46, 48,
-    51, 53, 55, 57,
-    62, 64, 66, 68,
-    71, 73, 75, 77,
-    82, 84, 86, 88,
-    91, 93, 95, 97,
-  ];
-  const lightSquares = darkSquares.map((square) => square - 1);
   const board = Array.from(
     "         \n         \n ........\n ........\n ........\n ........\n ........\n ........\n ........\n ........\n         \n         \n"
   );
@@ -683,32 +677,25 @@ function generatePosition(sideToMove) {
   ];
   exclusions.push(...edgeSquares);
 
-  const setPieces = (pieces, ranges, darkSet, lightSet) => {
-    let bishopExclusions = null;
+  const setPieces = (pieces, ranges) => {
+    let bishopColor = null;
     for (const piece of pieces) {
       if (piece.toLowerCase() === "k") {
         continue;
       }
       let position;
-      if (piece.toLowerCase() === "p") {
+      if (piece.toLowerCase() === "b") {
+        const candidates = getBishopPlacementCandidates(
+          bishopColor,
+          ranges,
+          exclusions
+        );
+        position = candidates[Math.floor(Math.random() * candidates.length)];
+        bishopColor = getSquareColor(position);
+      } else if (piece.toLowerCase() === "p") {
         position = getRandomPosition(ranges.pawnStart, ranges.pawnEnd, exclusions);
       } else {
         position = getRandomPosition(ranges.otherStart, ranges.otherEnd, exclusions);
-      }
-      if (piece.toLowerCase() === "b") {
-        if (!bishopExclusions) {
-          if (darkSet.includes(position)) {
-            bishopExclusions = darkSet;
-          } else if (lightSet.includes(position)) {
-            bishopExclusions = lightSet;
-          }
-        } else {
-          position = getRandomPosition(
-            ranges.otherStart,
-            ranges.otherEnd,
-            bishopExclusions.concat(exclusions)
-          );
-        }
       }
       board[position] = piece;
       exclusions.push(position);
@@ -744,8 +731,8 @@ function generatePosition(sideToMove) {
     exclusions.push(position);
   };
 
-  setPieces(whitePieces, { pawnStart: 51, pawnEnd: 89, otherStart: 51, otherEnd: 99 }, darkSquares, lightSquares);
-  setPieces(blackPieces, { pawnStart: 31, pawnEnd: 69, otherStart: 21, otherEnd: 69 }, darkSquares, lightSquares);
+  setPieces(whitePieces, { pawnStart: 51, pawnEnd: 89, otherStart: 51, otherEnd: 99 });
+  setPieces(blackPieces, { pawnStart: 31, pawnEnd: 69, otherStart: 21, otherEnd: 69 });
   setKing("K", blackDirections, 51, 99);
   setKing("k", whiteDirections, 21, 69);
 
@@ -778,7 +765,14 @@ function generatePosition(sideToMove) {
     return fenRow;
   });
 
-  return `${fenRows.join("/")} ${sideToMove} - - 0 1`;
+  const fen = `${fenRows.join("/")} ${sideToMove} - - 0 1`;
+  if (
+    !areBishopsOnOppositeColors(fen, "w") ||
+    !areBishopsOnOppositeColors(fen, "b")
+  ) {
+    return generatePosition(sideToMove);
+  }
+  return fen;
 }
 
 async function generateBalancedPosition(sideToMove, token) {
