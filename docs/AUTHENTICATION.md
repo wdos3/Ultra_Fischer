@@ -25,6 +25,8 @@ Ultra Fischer keeps the chess experience public. Accounts are an optional server
    The app removes the token from the visible URL and sends it once to `/api/auth/verify-recovery`; the server exchanges it with Supabase before showing the new-password form.
 6. Configure custom SMTP in Supabase Auth. Disable click tracking for authentication emails so verification and recovery URLs are not rewritten.
 
+The ready-to-apply HTML templates are versioned in `supabase/templates/confirmation.html` and `supabase/templates/recovery.html`. Supabase does not allow template changes while the free-tier default mailer is active, so apply them after custom SMTP is configured.
+
 ## Vercel environment variables
 
 Set these for Production, Preview, and local development as appropriate. None of these values belong in client-exposed variables:
