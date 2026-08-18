@@ -185,6 +185,8 @@ async function handleRecoveryLink() {
 }
 
 async function submitForm(form, handler) {
+  const emailInput = form.querySelector('input[type="email"]');
+  if (emailInput) emailInput.value = emailInput.value.trim();
   if (!form.reportValidity()) return;
   setFormBusy(form, true);
   try {
