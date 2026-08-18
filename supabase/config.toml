@@ -26,3 +26,11 @@ email_sent = 2
 [auth.mfa.totp]
 enroll_enabled = true
 verify_enabled = true
+
+[auth.email.template.confirmation]
+subject = "Confirm your Ultra Fischer account"
+content_path = "./supabase/templates/confirmation.html"
+
+[auth.email.template.recovery]
+subject = "Reset your Ultra Fischer password"
+content_path = "./supabase/templates/recovery.html"
