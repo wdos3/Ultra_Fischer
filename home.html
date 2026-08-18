@@ -11,345 +11,44 @@
     <script src="maingame/js/jquery-1.12.4.min.js"></script>
     <script src="maingame/js/chess.js"></script>
     <script src="maingame/js/chessboard-1.0.0.js"></script>
-    <script src="maingame/js/chessboard.js?v=engine-fallback" defer type="module"></script>
+    <script src="maingame/js/chessboard.js?v=local-first" defer type="module"></script>
   </head>
   <body data-theme="dark">
     <header class="app-header">
-      <a class="brand" href="home.html" aria-label="Ultra Fischer home">
-        <span class="brand-mark" aria-hidden="true">UF</span>
-        <span class="brand-name">Ultra Fischer</span>
-      </a>
-      <div class="header-actions">
-        <span class="header-note">Randomized chess</span>
-        <nav class="auth-nav" aria-label="Account">
-          <button id="sign-in-button" class="compact-button header-auth-button" type="button">Sign in</button>
-          <button id="register-button" class="compact-button header-auth-button primary" type="button">Register</button>
-          <button id="account-button" class="compact-button header-auth-button hidden" type="button" aria-expanded="false">Account</button>
-        </nav>
-        <button
-          id="settings-toggle"
-          class="icon-button"
-          type="button"
-          aria-expanded="false"
-          aria-controls="settings-card"
-          aria-label="Open settings"
-          title="Settings"
-        >
-          <span aria-hidden="true">&#9881;</span>
-        </button>
-      </div>
+      <a class="brand" href="home.html" aria-label="Ultra Fischer home"><span class="brand-mark" aria-hidden="true">UF</span><span class="brand-name">Ultra Fischer</span></a>
+      <div class="header-actions"><span class="header-note">Local randomized chess</span><button id="settings-toggle" class="icon-button" type="button" aria-expanded="false" aria-controls="app-menu" aria-label="Open app menu" title="App menu"><span aria-hidden="true">&#9881;</span></button></div>
     </header>
 
     <main class="game-shell">
       <section class="game-layout" aria-label="Ultra Fischer game">
         <section class="board-column" aria-label="Chessboard">
-          <div class="board-topline">
-            <span id="mode-pill" class="mode-label">Player vs AI</span>
-            <span id="status-text" class="status-text" aria-live="polite">Loading engine...</span>
-          </div>
-
+          <div class="board-topline"><span id="mode-pill" class="mode-label">Player vs AI</span><span id="status-text" class="status-text" aria-live="polite">Loading engine...</span></div>
           <div class="board-row">
-            <aside id="eval-panel" class="eval-panel" aria-label="Position evaluation">
-              <div id="eval-shell" class="eval-shell" role="img" aria-label="Position evaluation">
-                <div class="eval-track">
-                  <div id="eval-fill" class="eval-fill"></div>
-                  <div id="eval-marker" class="eval-marker"></div>
-                </div>
-              </div>
-              <div class="eval-readout">
-                <strong id="eval-label">0.0</strong>
-                <span id="eval-depth">--</span>
-              </div>
-              <button
-                id="eval-toggle"
-                class="micro-button"
-                type="button"
-                aria-label="Hide evaluation bar"
-                title="Hide evaluation bar"
-              >
-                <span aria-hidden="true">&#8722;</span>
-              </button>
-            </aside>
-
-            <div class="board-stack">
-              <div class="board-frame">
-                <div id="board" class="board"></div>
-              </div>
-
-              <div class="board-actions" aria-label="Game controls">
-                <button id="undo" class="icon-button action-button" type="button" aria-label="Undo pair" title="Undo pair">
-                  <span aria-hidden="true">&#8617;</span>
-                </button>
-                <button id="hint-button" class="icon-button action-button" type="button" aria-label="Show hint" title="Show hint">
-                  <span aria-hidden="true">&#9733;</span>
-                </button>
-                <button id="new-game" class="compact-button primary" type="button">New Game</button>
-                <button id="history-toggle" class="compact-button mobile-only" type="button" aria-controls="game-panel" aria-expanded="false">Moves</button>
-                <button id="share-position" class="icon-button action-button" type="button" aria-label="Copy FEN" title="Copy FEN">
-                  <span aria-hidden="true">&#10697;</span>
-                </button>
-                <button id="toggle-mode" class="compact-button secondary" type="button">PvP</button>
-                <button id="resign" class="compact-button danger" type="button">Resign</button>
-              </div>
-
-              <div class="player-strip">
-                <span>You: <strong id="player-color-label">White</strong></span>
-                <span aria-hidden="true">&bull;</span>
-                <strong id="turn-label">White to move</strong>
-              </div>
-            </div>
+            <aside id="eval-panel" class="eval-panel" aria-label="Position evaluation"><div id="eval-shell" class="eval-shell" role="img" aria-label="Position evaluation"><div class="eval-track"><div id="eval-fill" class="eval-fill"></div><div id="eval-marker" class="eval-marker"></div></div></div><div class="eval-readout"><strong id="eval-label">0.0</strong><span id="eval-depth">--</span></div><button id="eval-toggle" class="micro-button" type="button" aria-label="Hide evaluation bar" title="Hide evaluation bar"><span aria-hidden="true">&#8722;</span></button></aside>
+            <div class="board-stack"><div class="board-frame"><div id="board" class="board"></div></div><div class="board-actions" aria-label="Game controls"><button id="undo" class="icon-button action-button" type="button" aria-label="Undo pair" title="Undo pair"><span aria-hidden="true">&#8617;</span></button><button id="hint-button" class="icon-button action-button" type="button" aria-label="Show hint" title="Show hint"><span aria-hidden="true">&#9733;</span></button><button id="new-game" class="compact-button primary" type="button">New Game</button><button id="history-toggle" class="compact-button mobile-only" type="button" aria-controls="game-panel" aria-expanded="false">Moves</button><button id="share-position" class="icon-button action-button" type="button" aria-label="Copy FEN" title="Copy FEN"><span aria-hidden="true">&#10697;</span></button><button id="save-position" class="icon-button action-button" type="button" aria-label="Save position" title="Save position"><span aria-hidden="true">&#9734;</span></button><button id="copy-pgn" class="icon-button action-button" type="button" aria-label="Copy PGN" title="Copy PGN"><span aria-hidden="true">&#128203;</span></button><button id="download-pgn" class="icon-button action-button" type="button" aria-label="Download PGN" title="Download PGN"><span aria-hidden="true">&#8681;</span></button><button id="toggle-mode" class="compact-button secondary" type="button">PvP</button><button id="resign" class="compact-button danger" type="button">Resign</button></div><div class="player-strip"><span>You: <strong id="player-color-label">White</strong></span><span aria-hidden="true">&bull;</span><strong id="turn-label">White to move</strong></div></div>
           </div>
         </section>
-
-        <aside id="game-panel" class="game-panel" aria-label="Game record">
-          <div class="game-panel-head">
-            <div>
-              <span class="panel-kicker">Game record</span>
-              <strong id="opponent-label">Stockfish Level 4</strong>
-            </div>
-            <button id="history-close" class="icon-button mobile-only" type="button" aria-label="Close move history" title="Close move history">
-              <span aria-hidden="true">&#10005;</span>
-            </button>
-          </div>
-
-          <div class="record-summary">
-            <span id="record-color">You: White</span>
-            <span id="record-turn">White to move</span>
-          </div>
-
-          <div class="history-table history-header" aria-hidden="true">
-            <span>#</span>
-            <span>White</span>
-            <span>Black</span>
-          </div>
-          <div id="move-history" class="move-history" aria-live="polite"></div>
-        </aside>
+        <aside id="game-panel" class="game-panel" aria-label="Game record"><div class="game-panel-head"><div><span class="panel-kicker">Game record</span><strong id="opponent-label">Stockfish Level 4</strong></div><button id="history-close" class="icon-button mobile-only" type="button" aria-label="Close move history" title="Close move history"><span aria-hidden="true">&#10005;</span></button></div><div class="record-summary"><span id="record-color">You: White</span><span id="record-turn">White to move</span></div><div class="history-table history-header" aria-hidden="true"><span>#</span><span>White</span><span>Black</span></div><div id="move-history" class="move-history" aria-live="polite"></div></aside>
       </section>
     </main>
 
-    <section id="settings-card" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-      <div class="overlay-surface settings-surface">
-        <div class="overlay-head">
-          <div>
-            <span class="panel-kicker">Preferences</span>
-            <h2 id="settings-title">Settings</h2>
-          </div>
-          <button id="settings-close" class="icon-button" type="button" aria-label="Close settings" title="Close settings">
-            <span aria-hidden="true">&#10005;</span>
-          </button>
-        </div>
-        <div class="setting-list">
-          <label class="setting-field" for="ai-strength">
-            <span>
-              <strong>Stockfish level</strong>
-              <small id="ai-strength-detail">Depth 5 &middot; 200 ms</small>
-            </span>
-            <select id="ai-strength">
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="3">3</option>
-              <option value="4" selected>4</option>
-              <option value="5">5</option>
-              <option value="6">6</option>
-              <option value="7">7</option>
-              <option value="8">8</option>
-            </select>
-          </label>
-          <label class="setting-field" for="position-depth">
-            <span>
-              <strong>Position filter depth</strong>
-              <small>Used when generating a new random position</small>
-            </span>
-            <select id="position-depth">
-              <option value="8">8</option>
-              <option value="10">10</option>
-              <option value="12" selected>12</option>
-              <option value="14">14</option>
-            </select>
-          </label>
-          <div class="setting-field setting-toggle-row">
-            <span>
-              <strong>Evaluation bar</strong>
-              <small>Keep a strong analysis engine beside the board</small>
-            </span>
-            <button id="eval-setting-toggle" class="compact-button secondary" type="button">Visible</button>
-          </div>
-          <div class="setting-field setting-toggle-row">
-            <span>
-              <strong>Board theme</strong>
-              <small id="settings-caption">Dark interface</small>
-            </span>
-            <button id="theme-toggle" class="compact-button secondary" type="button">Light</button>
-          </div>
-        </div>
-        <p class="overlay-footnote">Settings apply to the next engine request. The evaluation and hint engine stays independent of your opponent level.</p>
-      </div>
-    </section>
+    <section id="app-menu" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="menu-title"><div class="overlay-surface menu-surface"><div class="overlay-head"><div><span class="panel-kicker">Ultra Fischer</span><h2 id="menu-title">App menu</h2></div><button id="menu-close" class="icon-button" type="button" aria-label="Close app menu" title="Close app menu"><span aria-hidden="true">&#10005;</span></button></div><div class="menu-grid"><button class="menu-item" data-panel="history" type="button"><strong>Game History</strong><small>Resume, replay, favorite, or delete games</small></button><button class="menu-item" data-panel="positions" type="button"><strong>Saved Positions</strong><small>Keep useful FEN positions ready to play</small></button><button class="menu-item" data-panel="statistics" type="button"><strong>Statistics</strong><small>Completed games and level breakdown</small></button><button class="menu-item" data-panel="settings" type="button"><strong>Settings</strong><small>Engine, board, and evaluation preferences</small></button><button class="menu-item" data-panel="data" type="button"><strong>Data &amp; Storage</strong><small>Back up or clear data stored on this device</small></button></div><p class="overlay-footnote">Games and preferences stay in this browser. No account or network sync is required.</p></div></section>
 
-    <section id="auth-dialog" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="auth-title">
-      <div class="overlay-surface auth-surface">
-        <div class="overlay-head">
-          <div>
-            <span class="panel-kicker">Ultra Fischer account</span>
-            <h2 id="auth-title">Sign in</h2>
-          </div>
-          <button id="auth-close" class="icon-button" type="button" aria-label="Close account dialog" title="Close account dialog">
-            <span aria-hidden="true">&#10005;</span>
-          </button>
-        </div>
+    <section id="settings-card" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div class="overlay-surface settings-surface"><div class="overlay-head"><div><span class="panel-kicker">Preferences</span><h2 id="settings-title">Settings</h2></div><button id="settings-close" class="icon-button" type="button" aria-label="Close settings" title="Close settings"><span aria-hidden="true">&#10005;</span></button></div><div class="setting-list"><label class="setting-field" for="ai-strength"><span><strong>Stockfish level</strong><small id="ai-strength-detail">Depth 5 &middot; 200 ms search</small></span><select id="ai-strength"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4" selected>4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option></select></label><label class="setting-field" for="position-depth"><span><strong>Position filter depth</strong><small>Used when generating a new random position</small></span><select id="position-depth"><option value="8">8</option><option value="10">10</option><option value="12" selected>12</option><option value="14">14</option></select></label><div class="setting-field setting-toggle-row"><span><strong>Evaluation bar</strong><small>Keep a strong analysis engine beside the board</small></span><button id="eval-setting-toggle" class="compact-button secondary" type="button">Visible</button></div><div class="setting-field setting-toggle-row"><span><strong>Board theme</strong><small id="settings-caption">Dark interface</small></span><button id="theme-toggle" class="compact-button secondary" type="button">Light</button></div></div><p class="overlay-footnote">Preferences are saved on this device and apply to future engine requests.</p></div></section>
 
-        <p id="auth-status" class="auth-status" aria-live="polite"></p>
+    <section id="history-dialog" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="history-title"><div class="overlay-surface wide-surface"><div class="overlay-head"><div><span class="panel-kicker">Local records</span><h2 id="history-title">Game History</h2></div><button data-close-panel="history-dialog" class="icon-button" type="button" aria-label="Close game history" title="Close game history"><span aria-hidden="true">&#10005;</span></button></div><div class="filter-row"><label for="history-filter">Show<select id="history-filter"><option value="all">All games</option><option value="in_progress">In progress</option><option value="win">Wins</option><option value="draw">Draws</option><option value="loss">Losses</option><option value="favorite">Favorites</option></select></label><label for="history-sort">Order<select id="history-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label></div><div id="history-list" class="record-list"></div></div></section>
 
-        <div class="auth-view" data-auth-view="login">
-          <p class="auth-intro">Sign in to keep your account ready on any device.</p>
-          <form id="login-form" class="auth-form" novalidate>
-            <label class="auth-field" for="login-email">
-              <span>Email</span>
-              <input id="login-email" name="email" type="text" inputmode="email" autocomplete="email" maxlength="254" required />
-            </label>
-            <label class="auth-field" for="login-password">
-              <span>Password</span>
-              <span class="password-input">
-                <input id="login-password" name="password" type="password" autocomplete="current-password" required />
-                <button class="password-toggle" data-target="login-password" type="button">Show</button>
-              </span>
-            </label>
-            <button class="compact-button primary auth-submit" type="submit">Sign in</button>
-          </form>
-          <div class="auth-links">
-            <button class="text-button" data-auth-open="forgot" type="button">Forgot password?</button>
-            <button class="text-button" data-auth-open="register" type="button">Create an account</button>
-          </div>
-        </div>
+    <section id="positions-dialog" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="positions-title"><div class="overlay-surface wide-surface"><div class="overlay-head"><div><span class="panel-kicker">Local records</span><h2 id="positions-title">Saved Positions</h2></div><button data-close-panel="positions-dialog" class="icon-button" type="button" aria-label="Close saved positions" title="Close saved positions"><span aria-hidden="true">&#10005;</span></button></div><div id="positions-list" class="record-list"></div></div></section>
 
-        <div class="auth-view hidden" data-auth-view="register">
-          <p class="auth-intro">Create an account. Guest play stays available without one.</p>
-          <form id="register-form" class="auth-form" novalidate>
-            <label class="auth-field" for="register-email">
-              <span>Email</span>
-              <input id="register-email" name="email" type="text" inputmode="email" autocomplete="email" maxlength="254" required />
-            </label>
-            <label class="auth-field" for="register-password">
-              <span>Password <small>8-32 characters</small></span>
-              <span class="password-input">
-                <input id="register-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
-                <button class="password-toggle" data-target="register-password" type="button">Show</button>
-              </span>
-            </label>
-            <label class="auth-field" for="register-confirm-password">
-              <span>Confirm password</span>
-              <input id="register-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
-            </label>
-            <button class="compact-button primary auth-submit" type="submit">Create account</button>
-          </form>
-          <div class="auth-links auth-links-single">
-            <button class="text-button" data-auth-open="login" type="button">Already have an account? Sign in</button>
-          </div>
-        </div>
+    <section id="statistics-dialog" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="statistics-title"><div class="overlay-surface wide-surface"><div class="overlay-head"><div><span class="panel-kicker">Local records</span><h2 id="statistics-title">Statistics</h2></div><button data-close-panel="statistics-dialog" class="icon-button" type="button" aria-label="Close statistics" title="Close statistics"><span aria-hidden="true">&#10005;</span></button></div><div id="statistics-content" class="statistics-content"></div></div></section>
 
-        <div class="auth-view hidden" data-auth-view="verify">
-          <p class="auth-intro">Enter the 6-digit code sent to <strong id="verification-email">your email address</strong>.</p>
-          <form id="verify-form" class="auth-form" novalidate>
-            <label class="auth-field" for="verification-code">
-              <span>Verification code</span>
-              <input id="verification-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required />
-            </label>
-            <button class="compact-button primary auth-submit" type="submit">Confirm email</button>
-          </form>
-          <div class="auth-links auth-links-single">
-            <button id="resend-code" class="text-button" type="button">Resend code</button>
-          </div>
-        </div>
+    <section id="data-dialog" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="data-title"><div class="overlay-surface wide-surface"><div class="overlay-head"><div><span class="panel-kicker">This device</span><h2 id="data-title">Data &amp; Storage</h2></div><button data-close-panel="data-dialog" class="icon-button" type="button" aria-label="Close data and storage" title="Close data and storage"><span aria-hidden="true">&#10005;</span></button></div><div id="storage-summary" class="storage-summary"></div><div class="data-actions"><button id="export-data" class="compact-button secondary" type="button">Export JSON</button><button id="import-data" class="compact-button secondary" type="button">Import JSON</button><input id="import-file" class="hidden" type="file" accept="application/json,.json" /><button id="clear-history" class="compact-button danger" type="button">Clear game history</button><button id="clear-positions" class="compact-button danger" type="button">Clear saved positions</button><button id="reset-preferences" class="compact-button danger" type="button">Reset preferences</button><button id="delete-all-data" class="compact-button danger" type="button">Delete all local data</button></div><p class="overlay-footnote">Export a JSON backup before clearing data. Delete all local data requires typing DELETE and cannot be undone.</p></div></section>
 
-        <div class="auth-view hidden" data-auth-view="forgot">
-          <p class="auth-intro">Enter your email and we will send a password reset link if the account exists.</p>
-          <form id="forgot-form" class="auth-form" novalidate>
-            <label class="auth-field" for="forgot-email">
-              <span>Email</span>
-              <input id="forgot-email" name="email" type="text" inputmode="email" autocomplete="email" maxlength="254" required />
-            </label>
-            <button class="compact-button primary auth-submit" type="submit">Send reset link</button>
-          </form>
-          <div class="auth-links auth-links-single">
-            <button class="text-button" data-auth-open="login" type="button">Back to sign in</button>
-          </div>
-        </div>
+    <section id="resume-dialog" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="resume-title"><div class="overlay-surface setup-surface"><div class="overlay-head"><div><span class="panel-kicker">Local record</span><h2 id="resume-title">Unfinished game</h2></div><button id="resume-close" class="icon-button" type="button" aria-label="Close resume prompt" title="Close resume prompt"><span aria-hidden="true">&#10005;</span></button></div><p id="resume-detail" class="overlay-copy"></p><div class="setup-actions"><button id="resume-game" class="compact-button primary" type="button">Resume</button><button id="resume-new-game" class="compact-button secondary" type="button">Start New Game</button></div></div></section>
 
-        <div class="auth-view hidden" data-auth-view="reset">
-          <p class="auth-intro">Choose a new password for your account.</p>
-          <form id="reset-form" class="auth-form" novalidate>
-            <label class="auth-field" for="reset-password">
-              <span>New password <small>8-32 characters</small></span>
-              <span class="password-input">
-                <input id="reset-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
-                <button class="password-toggle" data-target="reset-password" type="button">Show</button>
-              </span>
-            </label>
-            <label class="auth-field" for="reset-confirm-password">
-              <span>Confirm password</span>
-              <input id="reset-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
-            </label>
-            <button class="compact-button primary auth-submit" type="submit">Update password</button>
-          </form>
-        </div>
+    <section id="replay-dialog" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="replay-title"><div class="overlay-surface replay-surface"><div class="overlay-head"><div><span class="panel-kicker">Local record</span><h2 id="replay-title">Replay</h2></div><button id="replay-close" class="icon-button" type="button" aria-label="Close replay" title="Close replay"><span aria-hidden="true">&#10005;</span></button></div><div class="replay-layout"><div class="replay-board-frame"><div id="replay-board"></div></div><div id="replay-moves" class="replay-moves"></div></div><div class="replay-controls"><button id="replay-first" class="icon-button action-button" type="button" aria-label="First move" title="First move">&#8634;</button><button id="replay-prev" class="icon-button action-button" type="button" aria-label="Previous move" title="Previous move">&#8592;</button><span id="replay-position" class="replay-position">0 / 0</span><button id="replay-next" class="icon-button action-button" type="button" aria-label="Next move" title="Next move">&#8594;</button><button id="replay-last" class="icon-button action-button" type="button" aria-label="Last move" title="Last move">&#8635;</button></div></div></section>
 
-        <div class="auth-view hidden" data-auth-view="account">
-          <p class="auth-intro">Signed in as <strong id="account-email">your email address</strong>.</p>
-          <form id="change-password-form" class="auth-form" novalidate>
-            <label class="auth-field" for="current-password">
-              <span>Current password</span>
-              <span class="password-input">
-                <input id="current-password" name="currentPassword" type="password" autocomplete="current-password" required />
-                <button class="password-toggle" data-target="current-password" type="button">Show</button>
-              </span>
-            </label>
-            <label class="auth-field" for="change-password">
-              <span>New password <small>8-32 characters</small></span>
-              <span class="password-input">
-                <input id="change-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
-                <button class="password-toggle" data-target="change-password" type="button">Show</button>
-              </span>
-            </label>
-            <label class="auth-field" for="change-confirm-password">
-              <span>Confirm password</span>
-              <input id="change-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
-            </label>
-            <button class="compact-button secondary auth-submit" type="submit">Change password</button>
-          </form>
-          <button id="logout-button" class="compact-button danger auth-logout" type="button">Sign out</button>
-        </div>
-      </div>
-    </section>
-
-    <section id="new-game-dialog" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="new-game-title">
-      <div class="overlay-surface setup-surface">
-        <div class="overlay-head">
-          <div>
-            <span class="panel-kicker">New position</span>
-            <h2 id="new-game-title">Choose your side</h2>
-          </div>
-          <button id="setup-close" class="icon-button" type="button" aria-label="Close new game setup" title="Close new game setup">
-            <span aria-hidden="true">&#10005;</span>
-          </button>
-        </div>
-        <div class="setup-section">
-          <span class="setup-label">Play as</span>
-          <div class="color-picker" role="group" aria-label="Choose your color">
-            <button class="color-button active" data-color="w" type="button">White</button>
-            <button class="color-button" data-color="random" type="button">Random</button>
-            <button class="color-button" data-color="b" type="button">Black</button>
-          </div>
-        </div>
-        <div class="setup-section setup-level">
-          <span class="setup-label">Stockfish level</span>
-          <span id="setup-level-label" class="setup-value">Level 4 &middot; 200 ms</span>
-        </div>
-        <div class="setup-actions">
-          <button id="start-game" class="compact-button primary" type="button">Start Game</button>
-          <button id="setup-settings" class="compact-button secondary" type="button">Settings</button>
-        </div>
-      </div>
-    </section>
+    <section id="new-game-dialog" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="new-game-title"><div class="overlay-surface setup-surface"><div class="overlay-head"><div><span class="panel-kicker">New position</span><h2 id="new-game-title">Choose your side</h2></div><button id="setup-close" class="icon-button" type="button" aria-label="Close new game setup" title="Close new game setup"><span aria-hidden="true">&#10005;</span></button></div><div class="setup-section"><span class="setup-label">Play as</span><div class="color-picker" role="group" aria-label="Choose your color"><button class="color-button active" data-color="w" type="button">White</button><button class="color-button" data-color="random" type="button">Random</button><button class="color-button" data-color="b" type="button">Black</button></div></div><div class="setup-section setup-level"><span class="setup-label">Stockfish level</span><span id="setup-level-label" class="setup-value">Level 4 &middot; 200 ms</span></div><div class="setup-actions"><button id="start-game" class="compact-button primary" type="button">Start Game</button><button id="setup-settings" class="compact-button secondary" type="button">Settings</button></div></div></section>
 
     <div id="toast" class="toast" aria-live="polite"></div>
   </body>
