@@ -151,6 +151,15 @@ function notify(message) {
   window.setTimeout(() => toast.classList.remove("visible"), 2600);
 }
 
+function validationMessage(form) {
+  const invalid = form.querySelector(":invalid");
+  if (!invalid) return "";
+  if (invalid.type === "email") return "Enter a valid email address.";
+  if (invalid.name === "password" && invalid.validity.tooShort) return "Use a password with at least 15 characters.";
+  if (invalid.name === "code") return "Enter the 6-digit verification code.";
+  return "Complete the highlighted field.";
+}
+
 async function loadSession() {
   try {
     const data = await request("/api/auth/session");
@@ -187,7 +196,12 @@ async function handleRecoveryLink() {
 async function submitForm(form, handler) {
   const emailInput = form.querySelector('input[type="email"]');
   if (emailInput) emailInput.value = emailInput.value.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").trim();
-  if (!form.reportValidity()) return;
+  setStatus("");
+  if (!form.reportValidity()) {
+    const message = validationMessage(form);
+    if (message) setStatus(message, "error");
+    return;
+  }
   setFormBusy(form, true);
   try {
     await handler(formData(form));
