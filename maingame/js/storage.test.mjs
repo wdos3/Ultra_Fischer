@@ -25,3 +25,17 @@ test("validates a backup and discards malformed records", () => {
   assert.equal(backup.preferences.moveAnimation, "slide");
   assert.throws(() => validateBackup({ format: "other", version: 1, games: [], savedPositions: [] }));
 });
+
+test("keeps terminated games distinct from completed results and accepts favorite-game backups", () => {
+  const backup = validateBackup({
+    format: "Ultra_Fischer-backup",
+    version: 1,
+    games: [{ id: "game_terminated", startingFen, currentFen: startingFen, moves: [], status: "terminated", termination: "new_game" }],
+    favoriteGames: [{ id: "game_terminated", startingFen, currentFen: startingFen, moves: [], status: "terminated", termination: "new_game", isFavorite: true }],
+    preferences: {},
+  });
+  assert.equal(backup.games[0].status, "terminated");
+  assert.equal(backup.games[0].result, null);
+  assert.equal(backup.favoriteGames[0].isFavorite, true);
+  assert.equal(backup.savedPositions.length, 0);
+});

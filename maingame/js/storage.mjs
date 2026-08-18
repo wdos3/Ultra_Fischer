@@ -245,6 +245,7 @@ export function resetPreferences() {
 
 function cleanGame(record) {
   const now = Date.now();
+  const status = ["completed", "terminated"].includes(record.status) ? record.status : "in_progress";
   return {
     id: String(record.id || makeId("game")),
     label: String(record.label || "Game").slice(0, 120),
@@ -253,15 +254,15 @@ function cleanGame(record) {
     playerColor: record.playerColor === "b" ? "b" : "w",
     engineColor: record.engineColor === "w" ? "w" : "b",
     stockfishLevel: Math.max(1, Math.min(8, Number(record.stockfishLevel) || 4)),
-    status: record.status === "completed" ? "completed" : "in_progress",
-    result: ["win", "draw", "loss"].includes(record.result) ? record.result : null,
+    status,
+    result: status === "completed" && ["win", "draw", "loss"].includes(record.result) ? record.result : null,
     termination: record.termination || null,
     moves: Array.isArray(record.moves) ? record.moves.map((move) => String(move)).slice(0, 1000) : [],
     pgn: String(record.pgn || "").slice(0, 100000),
     isFavorite: Boolean(record.isFavorite),
     startedAt: Number(record.startedAt) || now,
     updatedAt: Number(record.updatedAt) || now,
-    finishedAt: record.finishedAt ? Number(record.finishedAt) : null,
+    finishedAt: ["completed", "terminated"].includes(status) ? (record.finishedAt ? Number(record.finishedAt) : now) : null,
     initialEvaluation: record.initialEvaluation || null,
     finalEvaluation: record.finalEvaluation || null,
     moveCount: Number(record.moveCount) || (Array.isArray(record.moves) ? record.moves.length : 0),
@@ -300,6 +301,16 @@ export async function setGameFavorite(id, isFavorite) {
   game.isFavorite = Boolean(isFavorite);
   game.updatedAt = Date.now();
   return updateGame(game);
+}
+
+export async function listFavoriteGames({ sort = "newest" } = {}) {
+  return listGames({ favorite: true, sort });
+}
+
+export async function clearGameFavorites() {
+  const favorites = await listFavoriteGames();
+  await Promise.all(favorites.map((game) => setGameFavorite(game.id, false)));
+  return favorites.length;
 }
 
 export async function renameGame(id, label) {
@@ -371,14 +382,16 @@ export async function clearSavedPositions() {
 export async function getStatistics() {
   const games = await listGames();
   const completed = games.filter((game) => game.status === "completed");
-  const stats = { total: completed.length, wins: 0, draws: 0, losses: 0, winRate: 0, levels: {} };
-  for (const game of completed) {
+  const terminated = games.filter((game) => game.status === "terminated");
+  const stats = { total: completed.length, terminated: terminated.length, wins: 0, draws: 0, losses: 0, winRate: 0, levels: {} };
+  for (const game of games.filter((record) => record.status === "completed" || record.status === "terminated")) {
     if (game.result === "win") stats.wins += 1;
     if (game.result === "draw") stats.draws += 1;
     if (game.result === "loss") stats.losses += 1;
     const level = String(game.stockfishLevel);
-    stats.levels[level] ||= { total: 0, wins: 0, draws: 0, losses: 0 };
-    stats.levels[level].total += 1;
+    stats.levels[level] ||= { total: 0, terminated: 0, wins: 0, draws: 0, losses: 0 };
+    if (game.status === "completed") stats.levels[level].total += 1;
+    if (game.status === "terminated") stats.levels[level].terminated += 1;
     if (game.result === "win") stats.levels[level].wins += 1;
     if (game.result === "draw") stats.levels[level].draws += 1;
     if (game.result === "loss") stats.levels[level].losses += 1;
@@ -395,7 +408,7 @@ export async function getStorageSummary() {
   } catch (error) {
     console.warn("Storage estimate unavailable.", error);
   }
-  return { games, positions, estimate };
+  return { games, positions, favorites: games.filter((game) => game.isFavorite), estimate };
 }
 
 function sanitizeBackupGame(record) {
@@ -406,11 +419,14 @@ function sanitizeBackupGame(record) {
 }
 
 export function validateBackup(backup) {
-  if (!backup || ![BACKUP_FORMAT, LEGACY_BACKUP_FORMAT].includes(backup.format) || backup.version !== BACKUP_VERSION || !Array.isArray(backup.games) || !Array.isArray(backup.savedPositions)) {
+  const hasFavoriteGames = Array.isArray(backup?.favoriteGames);
+  const hasLegacyPositions = Array.isArray(backup?.savedPositions);
+  if (!backup || ![BACKUP_FORMAT, LEGACY_BACKUP_FORMAT].includes(backup.format) || backup.version !== BACKUP_VERSION || !Array.isArray(backup.games) || (!hasFavoriteGames && !hasLegacyPositions)) {
     throw new Error("This file is not a valid Ultra_Fischer backup.");
   }
   const games = backup.games.map(sanitizeBackupGame).filter(Boolean);
-  const savedPositions = backup.savedPositions.map((position) => {
+  const favoriteGames = (backup.favoriteGames || []).map(sanitizeBackupGame).filter(Boolean);
+  const savedPositions = (backup.savedPositions || []).map((position) => {
     try {
       return cleanPosition(position);
     } catch (error) {
@@ -419,12 +435,12 @@ export function validateBackup(backup) {
   }).filter(Boolean);
   const preferences = { ...DEFAULT_PREFERENCES, ...(backup.preferences || {}) };
   preferences.moveAnimation = normalizeMoveAnimation(preferences.moveAnimation);
-  return { games, savedPositions, preferences };
+  return { games, favoriteGames, savedPositions, preferences };
 }
 
 export async function exportBackup() {
-  const [games, savedPositions, preferences] = await Promise.all([listGames(), listSavedPositions(), getPreferences()]);
-  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt: new Date().toISOString(), games, savedPositions, preferences };
+  const [games, preferences] = await Promise.all([listGames(), getPreferences()]);
+  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt: new Date().toISOString(), games, favoriteGames: games.filter((game) => game.isFavorite), preferences };
 }
 
 export async function importBackup(backup, mode = "merge") {
@@ -436,7 +452,12 @@ export async function importBackup(backup, mode = "merge") {
   const existingPositions = await listSavedPositions();
   const gameIds = new Set(existingGames.map((game) => game.id));
   const positionFens = new Set(existingPositions.map((position) => position.fen));
-  for (const game of valid.games) {
+  const favoriteIds = new Set(valid.favoriteGames.map((game) => game.id));
+  const importedGames = valid.games.map((game) => favoriteIds.has(game.id) ? { ...game, isFavorite: true } : game);
+  for (const game of valid.favoriteGames) {
+    if (!importedGames.some((item) => item.id === game.id)) importedGames.push({ ...game, isFavorite: true });
+  }
+  for (const game of importedGames) {
     if (gameIds.has(game.id)) await updateGame(game); else await createGame(game);
   }
   for (const position of valid.savedPositions) {

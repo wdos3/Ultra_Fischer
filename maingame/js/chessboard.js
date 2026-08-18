@@ -10,23 +10,20 @@ import {
   getSquareColor,
 } from "./position-utils.mjs";
 import {
+  clearGameFavorites,
   clearGames,
-  clearSavedPositions,
   createGame,
   deleteAllData,
   deleteGame,
-  deleteSavedPosition,
   exportBackup,
   getPreferences,
   getStatistics,
   getStorageSummary,
   importBackup,
+  listFavoriteGames,
   listGames,
-  listSavedPositions,
   renameGame,
-  renameSavedPosition,
   resetPreferences,
-  savePosition,
   savePreferences,
   setGameFavorite,
   updateGame,
@@ -66,8 +63,8 @@ const ui = {
   historyList: document.getElementById("history-list"),
   historyFilter: document.getElementById("history-filter"),
   historySort: document.getElementById("history-sort"),
-  positionsDialog: document.getElementById("positions-dialog"),
-  positionsList: document.getElementById("positions-list"),
+  favoritesDialog: document.getElementById("favorites-dialog"),
+  favoritesList: document.getElementById("favorites-list"),
   statisticsDialog: document.getElementById("statistics-dialog"),
   statisticsContent: document.getElementById("statistics-content"),
   dataDialog: document.getElementById("data-dialog"),
@@ -76,7 +73,7 @@ const ui = {
   importData: document.getElementById("import-data"),
   importFile: document.getElementById("import-file"),
   clearHistory: document.getElementById("clear-history"),
-  clearPositions: document.getElementById("clear-positions"),
+  clearFavorites: document.getElementById("clear-favorites"),
   resetPreferences: document.getElementById("reset-preferences"),
   deleteAllData: document.getElementById("delete-all-data"),
   resumeDialog: document.getElementById("resume-dialog"),
@@ -116,7 +113,6 @@ const ui = {
   settingsCaption: document.getElementById("settings-caption"),
   settingsToggle: document.getElementById("settings-toggle"),
   sharePosition: document.getElementById("share-position"),
-  savePosition: document.getElementById("save-position"),
   statusText: document.getElementById("status-text"),
   themeToggle: document.getElementById("theme-toggle"),
   toast: document.getElementById("toast"),
@@ -421,8 +417,9 @@ async function saveCurrentGame(overrides = {}) {
   }
   const now = Date.now();
   const detected = gameResult();
-  const result = overrides.result || detected.result;
-  const termination = overrides.termination || detected.termination;
+  const status = overrides.status || (overrides.result || detected.result ? "completed" : "in_progress");
+  const result = status === "completed" ? (overrides.result || detected.result) : null;
+  const termination = overrides.termination || (status === "terminated" ? "new_game" : detected.termination);
   const resultCode = result === "draw" ? "1/2-1/2" : result === "win" ? (state.actualPlayerColor === "w" ? "1-0" : "0-1") : result === "loss" ? (state.actualPlayerColor === "w" ? "0-1" : "1-0") : "*";
   const record = {
     id: state.currentGameId,
@@ -432,7 +429,7 @@ async function saveCurrentGame(overrides = {}) {
     playerColor: state.actualPlayerColor,
     engineColor: state.actualPlayerColor === "w" ? "b" : "w",
     stockfishLevel: Number(state.aiStrength),
-    status: result ? "completed" : "in_progress",
+    status,
     result,
     termination,
     moves: game.history(),
@@ -440,7 +437,7 @@ async function saveCurrentGame(overrides = {}) {
     isFavorite: state.currentGameFavorite,
     startedAt: state.currentStartedAt || now,
     updatedAt: now,
-    finishedAt: result ? (state.currentFinishedAt || now) : null,
+    finishedAt: ["completed", "terminated"].includes(status) ? (state.currentFinishedAt || now) : null,
     initialEvaluation: state.currentInitialEvaluation || null,
     finalEvaluation: state.lastEvalScore || null,
     moveCount: game.history().length,
@@ -452,6 +449,21 @@ async function saveCurrentGame(overrides = {}) {
   state.currentGameFavorite = saved.isFavorite;
   state.currentGameLabel = saved.label;
   return saved;
+}
+
+async function terminateCurrentGame() {
+  if (!state.currentGameId || !state.currentStartingFen || state.matchOver || game.game_over()) {
+    return null;
+  }
+  return saveCurrentGame({ status: "terminated", termination: "new_game" });
+}
+
+async function terminateGameRecord(record) {
+  if (!record || record.status !== "in_progress") {
+    return null;
+  }
+  const now = Date.now();
+  return updateGame({ ...record, status: "terminated", result: null, termination: "new_game", updatedAt: now, finishedAt: now });
 }
 
 async function persistCurrentGameQuietly() {
@@ -532,7 +544,7 @@ function setCurrentRecord(record) {
   state.currentGameLabel = record.label || `Game ${formatDate(record.startedAt)}`;
   state.actualPlayerColor = record.playerColor;
   state.aiStrength = normalizeLevel(record.stockfishLevel);
-  state.matchOver = record.status === "completed";
+  state.matchOver = record.status !== "in_progress";
   state.board.orientation(state.actualPlayerColor === "w" ? "white" : "black");
   state.board.position(game.fen(), false);
   syncSettingsUI();
@@ -615,6 +627,16 @@ function makeEditButton(action, id) {
   return button;
 }
 
+function recordStatusLabel(record) {
+  if (record.status === "terminated") {
+    return "Terminated";
+  }
+  if (record.status === "completed") {
+    return record.result === "win" ? "Won" : record.result === "loss" ? "Lost" : "Draw";
+  }
+  return "In progress";
+}
+
 function renderHistoryList(games) {
   ui.historyList.innerHTML = "";
   if (!games.length) {
@@ -637,7 +659,9 @@ function renderHistoryList(games) {
     detail.textContent = `${sideName(record.playerColor)} vs Level ${record.stockfishLevel} · ${formatDate(record.updatedAt)} · ${record.moveCount || 0} moves${record.isFavorite ? " · Favorite" : ""}`;
     const meta = document.createElement("span");
     meta.className = "record-item-meta";
-    meta.textContent = record.termination ? record.termination.replaceAll("_", " ") : "In progress";
+    meta.textContent = record.status === "terminated" && record.termination && record.termination !== "new_game"
+      ? `${recordStatusLabel(record)} · ${record.termination.replaceAll("_", " ")}`
+      : recordStatusLabel(record);
     main.append(title, detail, meta);
     const actions = document.createElement("div");
     actions.className = "record-item-actions";
@@ -658,54 +682,56 @@ async function refreshHistoryList() {
   try {
     const filter = ui.historyFilter.value;
     const games = await listGames({ favorite: filter === "favorite", sort: ui.historySort.value });
-    renderHistoryList(games.filter((record) => filter === "all" || filter === "favorite" || (filter === "in_progress" && record.status === "in_progress") || record.result === filter));
+    renderHistoryList(games.filter((record) => filter === "all" || filter === "favorite" || (filter === "in_progress" && record.status === "in_progress") || (filter === "terminated" && record.status === "terminated") || record.result === filter));
   } catch (error) {
     console.error(error);
     ui.historyList.textContent = "Local game history is unavailable in this browser.";
   }
 }
 
-function renderPositionsList(positions) {
-  ui.positionsList.innerHTML = "";
-  if (!positions.length) {
+function renderFavoritesList(games) {
+  ui.favoritesList.innerHTML = "";
+  if (!games.length) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
-    empty.textContent = "No saved positions yet. Save the current board from the game controls.";
-    ui.positionsList.appendChild(empty);
+    empty.textContent = "No favorite games yet. Favorite a game from Game History to keep it here.";
+    ui.favoritesList.appendChild(empty);
     return;
   }
-  for (const position of positions) {
+  for (const record of games) {
     const item = document.createElement("article");
     item.className = "record-item";
     const main = document.createElement("div");
     main.className = "record-item-main";
     const title = document.createElement("strong");
     title.className = "record-item-title";
-    title.textContent = position.label;
+    title.textContent = record.label || `Game ${formatDate(record.startedAt)}`;
     const detail = document.createElement("span");
     detail.className = "record-item-detail";
-    detail.textContent = `${sideName(position.playerColor)} · Level ${position.stockfishLevel} · ${formatDate(position.createdAt)}`;
-    const fen = document.createElement("span");
-    fen.className = "record-item-meta";
-    fen.textContent = position.fen;
-    main.append(title, detail, fen);
+    detail.textContent = `${sideName(record.playerColor)} vs Level ${record.stockfishLevel} · ${formatDate(record.updatedAt)} · ${record.moveCount || 0} moves`;
+    const meta = document.createElement("span");
+    meta.className = "record-item-meta";
+    meta.textContent = `${recordStatusLabel(record)} · PGN ready to copy`;
+    main.append(title, detail, meta);
     const actions = document.createElement("div");
     actions.className = "record-item-actions";
-    actions.appendChild(makeEditButton("position-rename", position.id));
-    const white = makeButton("Play White", "position-white", position.id);
-    const black = makeButton("Play Black", "position-black", position.id);
-    actions.append(white, black, makeButton("Delete", "position-delete", position.id));
+    actions.appendChild(makeEditButton("rename", record.id));
+    actions.appendChild(makeButton("Copy PGN", "copy-pgn", record.id));
+    if (record.status === "in_progress") actions.appendChild(makeButton("Resume", "resume", record.id));
+    actions.appendChild(makeButton("Replay", "replay", record.id));
+    actions.appendChild(makeButton("Play Again", "again", record.id));
+    actions.appendChild(makeButton("Unfavorite", "favorite", record.id));
     item.append(main, actions);
-    ui.positionsList.appendChild(item);
+    ui.favoritesList.appendChild(item);
   }
 }
 
-async function refreshPositionsList() {
+async function refreshFavoritesList() {
   try {
-    renderPositionsList(await listSavedPositions());
+    renderFavoritesList(await listFavoriteGames());
   } catch (error) {
     console.error(error);
-    ui.positionsList.textContent = "Saved positions are unavailable in this browser.";
+    ui.favoritesList.textContent = "Favorite games are unavailable in this browser.";
   }
 }
 
@@ -714,7 +740,7 @@ async function refreshStatistics() {
   ui.statisticsContent.innerHTML = "";
   const grid = document.createElement("div");
   grid.className = "statistics-grid";
-  for (const [label, value] of [["Games", stats.total], ["Wins", stats.wins], ["Draws", stats.draws], ["Losses", stats.losses]]) {
+  for (const [label, value] of [["Games", stats.total], ["Wins", stats.wins], ["Draws", stats.draws], ["Losses", stats.losses], ["Terminated", stats.terminated]]) {
     const card = document.createElement("div");
     card.className = "stat-card";
     const strong = document.createElement("strong");
@@ -730,14 +756,14 @@ async function refreshStatistics() {
   ui.statisticsContent.appendChild(rate);
   const table = document.createElement("div");
   table.className = "level-table";
-  for (const value of ["Level", "Games", "Wins", "Draws", "Losses"]) {
+  for (const value of ["Level", "Games", "Wins", "Draws", "Losses", "Terminated"]) {
     const cell = document.createElement("span");
     cell.textContent = value;
     table.appendChild(cell);
   }
   for (const level of Object.keys(stats.levels).sort((a, b) => Number(a) - Number(b))) {
     const row = stats.levels[level];
-    for (const value of [level, row.total, row.wins, row.draws, row.losses]) {
+    for (const value of [level, row.total, row.wins, row.draws, row.losses, row.terminated]) {
       const cell = document.createElement("span");
       cell.textContent = value;
       table.appendChild(cell);
@@ -749,17 +775,17 @@ async function refreshStatistics() {
 async function refreshStorageSummary() {
   const summary = await getStorageSummary();
   const usage = summary.estimate?.usage ? ` · ${Math.round(summary.estimate.usage / 1024)} KB used` : "";
-  ui.storageSummary.textContent = `${summary.games.length} saved games · ${summary.positions.length} saved positions${usage}`;
+  ui.storageSummary.textContent = `${summary.games.length} games · ${summary.favorites.length} favorite games${usage}`;
 }
 
 async function openPanel(panel) {
   closeAppMenu();
-  const panels = { history: ui.historyDialog, positions: ui.positionsDialog, statistics: ui.statisticsDialog, data: ui.dataDialog, settings: ui.settingsCard };
+  const panels = { history: ui.historyDialog, favorites: ui.favoritesDialog, statistics: ui.statisticsDialog, data: ui.dataDialog, settings: ui.settingsCard };
   const element = panels[panel];
   if (!element) return;
   openOverlay(element);
   if (panel === "history") await refreshHistoryList();
-  if (panel === "positions") await refreshPositionsList();
+  if (panel === "favorites") await refreshFavoritesList();
   if (panel === "statistics") await refreshStatistics();
   if (panel === "data") await refreshStorageSummary();
 }
@@ -780,7 +806,7 @@ function preparePlayAgain(startingFen, color, level) {
   syncColorButtons();
   syncSettingsUI();
   closeOverlay(ui.historyDialog);
-  closeOverlay(ui.positionsDialog);
+  closeOverlay(ui.favoritesDialog);
   openOverlay(ui.newGameDialog);
   state.setupOpen = true;
   syncSetupPanel();
@@ -1030,8 +1056,7 @@ async function copyCurrentFen() {
   }
 }
 
-async function copyCurrentPgn() {
-  const pgn = buildPgn(state.currentStartingFen || game.fen(), game.history(), gameResult().resultCode);
+async function copyPgn(pgn) {
   const fallbackCopy = () => {
     const helper = document.createElement("textarea");
     helper.value = pgn;
@@ -1067,6 +1092,10 @@ async function copyCurrentPgn() {
   }
 }
 
+async function copyCurrentPgn() {
+  await copyPgn(buildPgn(state.currentStartingFen || game.fen(), game.history(), gameResult().resultCode));
+}
+
 function downloadCurrentPgn() {
   const pgn = buildPgn(state.currentStartingFen || game.fen(), game.history(), gameResult().resultCode);
   const link = document.createElement("a");
@@ -1075,18 +1104,6 @@ function downloadCurrentPgn() {
   link.click();
   URL.revokeObjectURL(link.href);
   showToast("PGN download started.");
-}
-
-async function saveCurrentPosition() {
-  const label = window.prompt("Name this position", "Saved position");
-  if (label === null) return;
-  try {
-    await savePosition({ fen: game.fen(), label: label.trim() || "Saved position", playerColor: state.actualPlayerColor, stockfishLevel: state.aiStrength });
-    showToast("Position saved locally.");
-  } catch (error) {
-    console.error(error);
-    showToast(error.message || "Could not save position.");
-  }
 }
 
 async function showHint() {
@@ -1392,7 +1409,6 @@ async function startNewGame() {
   }
 
   const token = ++state.taskToken;
-  state.matchOver = false;
   setBusy(true);
   updateEvalBar(null);
 
@@ -1412,7 +1428,7 @@ async function startNewGame() {
 
   state.actualPlayerColor = actualColor;
   state.board.orientation(actualColor === "w" ? "white" : "black");
-  setStatus(state.pendingStartFen ? "Loading saved position..." : "Preparing a randomized position...");
+  setStatus(state.pendingStartFen ? "Loading favorite game..." : "Preparing a randomized position...");
 
   try {
     const candidate = state.pendingStartFen
@@ -1427,6 +1443,11 @@ async function startNewGame() {
       return;
     }
 
+    await terminateCurrentGame();
+    if (token !== state.taskToken) {
+      return;
+    }
+    state.matchOver = false;
     game.load(candidate.fen);
     state.pendingStartFen = null;
     state.initialFen = null;
@@ -1773,10 +1794,6 @@ function bindEvents() {
     void copyCurrentFen();
   });
 
-  ui.savePosition.addEventListener("click", () => {
-    void saveCurrentPosition();
-  });
-
   ui.copyPgn.addEventListener("click", () => {
     void copyCurrentPgn();
   });
@@ -1848,16 +1865,21 @@ function bindEvents() {
       const label = window.prompt("Name this game", record.label || `Game ${formatDate(record.startedAt)}`);
       if (label?.trim()) {
         const renamed = await renameGame(record.id, label);
-        if (record.id === state.currentGameId && renamed) state.currentGameLabel = renamed.label;
+      if (record.id === state.currentGameId && renamed) state.currentGameLabel = renamed.label;
       }
       await refreshHistoryList();
+      await refreshFavoritesList();
       return;
     }
     if (action === "favorite") {
       await setGameFavorite(record.id, !record.isFavorite);
       if (record.id === state.currentGameId) state.currentGameFavorite = !record.isFavorite;
+      await refreshFavoritesList();
     }
-    if (action === "delete" && window.confirm("Delete this local game record?")) await deleteGame(record.id);
+    if (action === "delete" && window.confirm("Delete this local game record?")) {
+      await deleteGame(record.id);
+      await refreshFavoritesList();
+    }
     if (action === "replay") { closeOverlay(ui.historyDialog); openReplay(record); return; }
     if (action === "again") { preparePlayAgain(record.startingFen, record.playerColor, record.stockfishLevel); return; }
     if (action === "resume") {
@@ -1866,23 +1888,69 @@ function bindEvents() {
     }
     await refreshHistoryList();
   });
-  ui.positionsList.addEventListener("click", async (event) => {
+  ui.favoritesList.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-record-action]");
     if (!button) return;
-    const position = (await listSavedPositions()).find((item) => item.id === button.dataset.recordId);
-    if (!position) return;
-    if (button.dataset.recordAction === "position-rename") {
-      const label = window.prompt("Name this saved position", position.label);
-      if (label?.trim()) await renameSavedPosition(position.id, label);
-      await refreshPositionsList();
+    const record = (await listFavoriteGames()).find((item) => item.id === button.dataset.recordId);
+    if (!record) return;
+    const action = button.dataset.recordAction;
+    if (action === "rename") {
+      const label = window.prompt("Name this favorite game", record.label);
+      if (label?.trim()) {
+        const renamed = await renameGame(record.id, label);
+        if (record.id === state.currentGameId && renamed) state.currentGameLabel = renamed.label;
+      }
+      await refreshFavoritesList();
       return;
     }
-    if (button.dataset.recordAction === "position-delete") { if (window.confirm("Delete this saved position?")) await deleteSavedPosition(position.id); await refreshPositionsList(); return; }
-    preparePlayAgain(position.fen, button.dataset.recordAction === "position-black" ? "b" : "w", position.stockfishLevel);
-    closeOverlay(ui.positionsDialog);
+    if (action === "copy-pgn") {
+      const resultCode = record.result === "draw" ? "1/2-1/2" : record.result === "win" ? (record.playerColor === "w" ? "1-0" : "0-1") : record.result === "loss" ? (record.playerColor === "w" ? "0-1" : "1-0") : "*";
+      await copyPgn(record.pgn || buildPgn(record.startingFen, record.moves || [], resultCode));
+      return;
+    }
+    if (action === "favorite") {
+      await setGameFavorite(record.id, false);
+      await refreshFavoritesList();
+      await refreshHistoryList();
+      return;
+    }
+    if (action === "replay") {
+      closeOverlay(ui.favoritesDialog);
+      openReplay(record);
+      return;
+    }
+    if (action === "again") {
+      preparePlayAgain(record.startingFen, record.playerColor, record.stockfishLevel);
+      return;
+    }
+    if (action === "resume") {
+      try {
+        setCurrentRecord(record);
+        closeOverlay(ui.favoritesDialog);
+        if (!state.matchOver && !state.playerVsPlayer && game.turn() !== state.actualPlayerColor) {
+          setBusy(true);
+          await runComputerTurn(++state.taskToken);
+          setBusy(false);
+        }
+      } catch (error) {
+        console.error(error);
+        showToast("Could not resume this game.");
+      }
+    }
   });
   ui.resumeGame.addEventListener("click", async () => { if (!state.resumeRecord) return; try { setCurrentRecord(state.resumeRecord); closeOverlay(ui.resumeDialog); if (!state.matchOver && !state.playerVsPlayer && game.turn() !== state.actualPlayerColor) { setBusy(true); await runComputerTurn(++state.taskToken); setBusy(false); } } catch (error) { console.error(error); showToast("Could not resume this game."); } });
-  ui.resumeNewGame.addEventListener("click", () => { closeOverlay(ui.resumeDialog); state.resumeRecord = null; void startNewGame(); });
+  ui.resumeNewGame.addEventListener("click", async () => {
+    const record = state.resumeRecord;
+    closeOverlay(ui.resumeDialog);
+    state.resumeRecord = null;
+    try {
+      await terminateGameRecord(record);
+      await startNewGame();
+    } catch (error) {
+      console.error(error);
+      showToast("Could not start a new game.");
+    }
+  });
   ui.resumeClose.addEventListener("click", () => closeOverlay(ui.resumeDialog));
   ui.promotionClose.addEventListener("click", () => closePromotionDialog());
   ui.promotionOptions.addEventListener("click", (event) => {
@@ -1899,11 +1967,11 @@ function bindEvents() {
   ui.replayLast.addEventListener("click", () => { state.replay.index = state.replay.record?.moves?.length || 0; renderReplay(); });
   ui.exportData.addEventListener("click", async () => { try { const backup = await exportBackup(); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" })); link.download = `Ultra_Fischer-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); showToast("Backup exported."); } catch (error) { console.error(error); showToast("Could not export local data."); } });
   ui.importData.addEventListener("click", () => ui.importFile.click());
-  ui.importFile.addEventListener("change", async () => { const file = ui.importFile.files?.[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) { showToast("Backup is larger than 5 MB."); return; } try { const backup = JSON.parse(await file.text()); const replace = window.confirm("Press OK to replace local data, or Cancel to merge this backup."); await importBackup(backup, replace ? "replace" : "merge"); showToast("Backup imported."); await refreshStorageSummary(); await refreshHistoryList(); } catch (error) { console.error(error); showToast(error.message || "Could not import backup."); } finally { ui.importFile.value = ""; } });
-  ui.clearHistory.addEventListener("click", async () => { if (window.confirm("Clear all local game history?")) { await clearGames(); await refreshStorageSummary(); await refreshHistoryList(); showToast("Game history cleared."); } });
-  ui.clearPositions.addEventListener("click", async () => { if (window.confirm("Clear all saved positions?")) { await clearSavedPositions(); await refreshStorageSummary(); await refreshPositionsList(); showToast("Saved positions cleared."); } });
+  ui.importFile.addEventListener("change", async () => { const file = ui.importFile.files?.[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) { showToast("Backup is larger than 5 MB."); return; } try { const backup = JSON.parse(await file.text()); const replace = window.confirm("Press OK to replace local data, or Cancel to merge this backup."); await importBackup(backup, replace ? "replace" : "merge"); showToast("Backup imported."); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); } catch (error) { console.error(error); showToast(error.message || "Could not import backup."); } finally { ui.importFile.value = ""; } });
+  ui.clearHistory.addEventListener("click", async () => { if (window.confirm("Clear all local game history?")) { await clearGames(); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); showToast("Game history cleared."); } });
+  ui.clearFavorites.addEventListener("click", async () => { if (window.confirm("Remove all games from Favorite Games?")) { await clearGameFavorites(); await refreshStorageSummary(); await refreshFavoritesList(); await refreshHistoryList(); showToast("Favorite games cleared."); } });
   ui.resetPreferences.addEventListener("click", async () => { if (window.confirm("Reset local preferences?")) { const previousAnimation = state.moveAnimation; const preferences = await resetPreferences(); Object.assign(state, preferences); syncTheme(); syncEvalVisibility(); syncColorButtons(); syncSettingsUI(); if (previousAnimation !== state.moveAnimation) rebuildBoard(); await persistPreferences(); showToast("Preferences reset."); } });
-  ui.deleteAllData.addEventListener("click", async () => { if (window.prompt("Type DELETE to remove all local games, positions, and preferences.") === "DELETE") { await deleteAllData(); showToast("All local data deleted."); await refreshStorageSummary(); await refreshHistoryList(); } });
+  ui.deleteAllData.addEventListener("click", async () => { if (window.prompt("Type DELETE to remove all local games, favorite games, and preferences.") === "DELETE") { await deleteAllData(); showToast("All local data deleted."); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); } });
 
   ui.settingsClose.addEventListener("click", closeSettings);
 

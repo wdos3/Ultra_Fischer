@@ -4,7 +4,7 @@ Ultra_Fischer is randomized chess with a local-first game archive. Positions are
 
 ## Local data
 
-- Game records, unfinished games, favorites, saved positions, replays, and statistics use IndexedDB in a versioned `Ultra_Fischer` database.
+- Game records, unfinished and terminated games, favorite games, replays, and statistics use IndexedDB in a versioned `Ultra_Fischer` database.
 - Engine and interface preferences use the namespaced `Ultra_Fischer.preferences` localStorage key.
 - The Data & Storage panel exports and imports a validated JSON backup and provides deliberate clear/delete controls.
 - No account, email address, remote game API, or cloud sync is required.

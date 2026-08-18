@@ -1096,7 +1096,7 @@ body.eval-hidden .board-row {
 .statistics-grid {
   display: grid;
   gap: 6px;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   margin-bottom: 14px;
 }
 
@@ -1123,7 +1123,7 @@ body.eval-hidden .board-row {
 .level-table {
   border-top: 1px solid var(--border);
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   padding-top: 8px;
 }
 
@@ -1131,7 +1131,7 @@ body.eval-hidden .board-row {
   padding: 5px 3px;
 }
 
-.level-table span:nth-child(-n + 5) {
+.level-table span:nth-child(-n + 6) {
   color: var(--faint);
   font-size: 10px;
   text-transform: uppercase;
