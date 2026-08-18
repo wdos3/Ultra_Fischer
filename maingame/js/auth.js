@@ -195,7 +195,7 @@ async function handleRecoveryLink() {
 }
 
 async function submitForm(form, handler) {
-  const emailInput = form.querySelector('input[type="email"]');
+  const emailInput = form.querySelector('input[name="email"]');
   if (emailInput) emailInput.value = emailInput.value.replace(/[\p{Cc}\p{Cf}\p{White_Space}]/gu, "").trim();
   setStatus("");
   if (!form.reportValidity()) {
@@ -203,9 +203,10 @@ async function submitForm(form, handler) {
     if (message) setStatus(message, "error");
     return;
   }
+  const data = formData(form);
   setFormBusy(form, true);
   try {
-    await handler(formData(form));
+    await handler(data);
   } catch (error) {
     setStatus(userError(error), "error");
   } finally {
