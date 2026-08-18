@@ -89,7 +89,9 @@ test("login sets server-only session cookies and never returns tokens", async ()
   assert.equal(cookies.length, 2);
   assert.match(cookies[0], /__Host-uf-access=.*HttpOnly.*Secure.*SameSite=Lax/);
   assert.match(cookies[1], /__Host-uf-refresh=.*HttpOnly.*Secure.*SameSite=Lax/);
-  assert.equal(calls.filter((call) => call.url.includes("consume_auth_rate_limit")).length, 2);
+  const rateLimitCalls = calls.filter((call) => call.url.includes("consume_auth_rate_limit"));
+  assert.equal(rateLimitCalls.length, 2);
+  assert.equal(rateLimitCalls[0].options.headers.Authorization, "Bearer service-key");
 });
 
 test("rate limiting stops auth work before the provider is called", async () => {

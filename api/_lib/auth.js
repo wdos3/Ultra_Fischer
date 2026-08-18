@@ -189,12 +189,13 @@ async function readJson(req) {
   }
 }
 
-function providerHeaders(apiKey, accessToken) {
+function providerHeaders(apiKey, accessToken, useServiceRole = false) {
+  const authorization = accessToken || (useServiceRole ? apiKey : "");
   return {
     Accept: "application/json",
     "Content-Type": "application/json",
     apikey: apiKey,
-    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    ...(authorization ? { Authorization: `Bearer ${authorization}` } : {}),
   };
 }
 
@@ -203,7 +204,7 @@ async function providerRequest(path, { method = "GET", body, accessToken, useSer
   const apiKey = useServiceRole ? config.serviceRoleKey : config.anonKey;
   const response = await fetch(`${config.supabaseUrl}${path}`, {
     method,
-    headers: providerHeaders(apiKey, accessToken),
+    headers: providerHeaders(apiKey, accessToken, useServiceRole),
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
