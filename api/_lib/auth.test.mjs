@@ -52,8 +52,9 @@ afterEach(() => {
 test("normalizes email and enforces long passwords", () => {
   assert.equal(auth.normalizeEmail("  PLAYER@Example.COM "), "player@example.com");
   assert.equal(auth.normalizeEmail("opcleaver0@\u200Bgmail.com"), "opcleaver0@gmail.com");
-  assert.equal(auth.validatePassword("short"), "Use a password with at least 15 characters.");
-  assert.equal(auth.validatePassword("a".repeat(15)), "");
+  assert.equal(auth.validatePassword("short"), "Use a password with at least 8 characters.");
+  assert.equal(auth.validatePassword("a".repeat(8)), "");
+  assert.equal(auth.validatePassword("a".repeat(33)), "Use a password with no more than 32 characters.");
   assert.equal(auth.isValidEmail("player@example.com"), true);
   assert.equal(auth.isValidEmail("not-an-email"), false);
 });
@@ -65,7 +66,7 @@ test("masks email addresses without exposing the full local part", () => {
 
 test("rejects state-changing requests without an allowed origin", async () => {
   const res = mockResponse();
-  await auth.route(request("login", { email: "player@example.com", password: "a".repeat(15) }, {}), res);
+  await auth.route(request("login", { email: "player@example.com", password: "a".repeat(8) }, {}), res);
   assert.equal(res.statusCode, 403);
   assert.match(res.body, /origin_not_allowed/);
 });
@@ -83,7 +84,7 @@ test("login sets server-only session cookies and never returns tokens", async ()
     });
   };
   const res = mockResponse();
-  await auth.route(request("login", { email: "player@example.com", password: "a".repeat(15) }), res);
+  await auth.route(request("login", { email: "player@example.com", password: "a".repeat(8) }), res);
   assert.equal(res.statusCode, 200);
   assert.doesNotMatch(res.body, /access-token|refresh-token/);
   const cookies = res.headers.get("Set-Cookie");
@@ -103,7 +104,7 @@ test("rate limiting stops auth work before the provider is called", async () => 
     return response({});
   };
   const res = mockResponse();
-  await auth.route(request("login", { email: "player@example.com", password: "a".repeat(15) }), res);
+  await auth.route(request("login", { email: "player@example.com", password: "a".repeat(8) }), res);
   assert.equal(res.statusCode, 429);
   assert.equal(providerCalls, 0);
   assert.match(res.body, /rate_limited/);

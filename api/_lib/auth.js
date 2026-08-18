@@ -68,11 +68,11 @@ function isValidEmail(email) {
 }
 
 function validatePassword(password) {
-  if (typeof password !== "string" || password.length < 15) {
-    return "Use a password with at least 15 characters.";
+  if (typeof password !== "string" || password.length < 8) {
+    return "Use a password with at least 8 characters.";
   }
-  if (password.length > 1024) {
-    return "Use a password shorter than 1024 characters.";
+  if (password.length > 32) {
+    return "Use a password with no more than 32 characters.";
   }
   return "";
 }

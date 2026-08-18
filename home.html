@@ -230,15 +230,15 @@
               <input id="register-email" name="email" type="email" autocomplete="email" maxlength="254" required />
             </label>
             <label class="auth-field" for="register-password">
-              <span>Password <small>15+ characters</small></span>
+              <span>Password <small>8-32 characters</small></span>
               <span class="password-input">
-                <input id="register-password" name="password" type="password" autocomplete="new-password" minlength="15" required />
+                <input id="register-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
                 <button class="password-toggle" data-target="register-password" type="button">Show</button>
               </span>
             </label>
             <label class="auth-field" for="register-confirm-password">
               <span>Confirm password</span>
-              <input id="register-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="15" required />
+              <input id="register-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
             </label>
             <button class="compact-button primary auth-submit" type="submit">Create account</button>
           </form>
@@ -279,15 +279,15 @@
           <p class="auth-intro">Choose a new password for your account.</p>
           <form id="reset-form" class="auth-form" novalidate>
             <label class="auth-field" for="reset-password">
-              <span>New password <small>15+ characters</small></span>
+              <span>New password <small>8-32 characters</small></span>
               <span class="password-input">
-                <input id="reset-password" name="password" type="password" autocomplete="new-password" minlength="15" required />
+                <input id="reset-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
                 <button class="password-toggle" data-target="reset-password" type="button">Show</button>
               </span>
             </label>
             <label class="auth-field" for="reset-confirm-password">
               <span>Confirm password</span>
-              <input id="reset-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="15" required />
+              <input id="reset-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
             </label>
             <button class="compact-button primary auth-submit" type="submit">Update password</button>
           </form>
@@ -304,15 +304,15 @@
               </span>
             </label>
             <label class="auth-field" for="change-password">
-              <span>New password <small>15+ characters</small></span>
+              <span>New password <small>8-32 characters</small></span>
               <span class="password-input">
-                <input id="change-password" name="password" type="password" autocomplete="new-password" minlength="15" required />
+                <input id="change-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
                 <button class="password-toggle" data-target="change-password" type="button">Show</button>
               </span>
             </label>
             <label class="auth-field" for="change-confirm-password">
               <span>Confirm password</span>
-              <input id="change-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="15" required />
+              <input id="change-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="8" maxlength="32" required />
             </label>
             <button class="compact-button secondary auth-submit" type="submit">Change password</button>
           </form>

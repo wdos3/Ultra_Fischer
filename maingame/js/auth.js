@@ -155,7 +155,8 @@ function validationMessage(form) {
   const invalid = form.querySelector(":invalid");
   if (!invalid) return "";
   if (invalid.type === "email") return "Enter a valid email address.";
-  if (invalid.name === "password" && invalid.validity.tooShort) return "Use a password with at least 15 characters.";
+  if (invalid.name === "password" && invalid.validity.tooShort) return "Use a password with at least 8 characters.";
+  if (invalid.name === "password" && invalid.validity.tooLong) return "Use a password with no more than 32 characters.";
   if (invalid.name === "code") return "Enter the 6-digit verification code.";
   return "Complete the highlighted field.";
 }

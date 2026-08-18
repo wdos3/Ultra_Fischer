@@ -50,7 +50,7 @@ The repository includes `.env.example` with placeholders and ignores `.env`, `.e
 
 ## Flows and limits
 
-- Registration accepts email, password, and confirmation. Passwords must be at least 15 characters and may be long passphrases. The response is intentionally generic for duplicate addresses; it does not confirm account existence.
+- Registration accepts email, password, and confirmation. New passwords must be 8-32 characters. The response is intentionally generic for duplicate addresses; it does not confirm account existence.
 - Verification uses the provider's six-digit OTP, 10-minute expiry, and single-use validation. The resend button and server both enforce a 60-second cooldown; the server also limits resends to three per email per hour and fifteen per IP per hour.
 - Login is generic for invalid credentials, while an unconfirmed account receives a safe verification-required state. Login attempts are limited to fifteen per IP and eight per email per 15 minutes.
 - Forgot-password responses are enumeration-safe. They use a single-use Supabase recovery token and are limited to five requests per IP and three per email per hour.
