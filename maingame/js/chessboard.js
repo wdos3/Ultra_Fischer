@@ -37,6 +37,19 @@ const LEGACY_LEVELS = {
 };
 
 const EVALUATION_DEPTH = 16;
+const POSITION_GENERATION_TIMEOUT_MS = 15000;
+const POSITION_ACCEPTANCE_CP = 150;
+const POSITION_SCREEN_LIMIT_CP = 350;
+const POSITION_SCREEN_PROFILE = Object.freeze({
+  ...ANALYSIS_PROFILE,
+  depth: 10,
+  moveTime: 300,
+});
+const POSITION_CONFIRM_PROFILE = Object.freeze({
+  ...ANALYSIS_PROFILE,
+  depth: EVALUATION_DEPTH,
+  moveTime: 800,
+});
 
 function normalizeLevel(value) {
   const migratedValue = LEGACY_LEVELS[value] || value;
@@ -130,7 +143,8 @@ const state = {
   board: null,
   analysisEngine: null,
   engineReady: false,
-  evalVisible: true,
+  evalVisible: false,
+  evalVisibilityConfigured: false,
   moveAnimation: "slide",
   isBusy: true,
   lastEvalScore: null,
@@ -523,7 +537,7 @@ function loadRecordIntoGame(record) {
 
 async function persistPreferences() {
   try {
-    await savePreferences({ aiStrength: state.aiStrength, evalVisible: state.evalVisible, moveAnimation: state.moveAnimation, positionDepth: state.positionDepth, requestedColor: state.requestedColor, settingsOpen: state.settingsOpen, theme: state.theme });
+    await savePreferences({ aiStrength: state.aiStrength, evalVisible: state.evalVisible, evalVisibilityConfigured: state.evalVisibilityConfigured, moveAnimation: state.moveAnimation, positionDepth: state.positionDepth, requestedColor: state.requestedColor, settingsOpen: state.settingsOpen, theme: state.theme });
   } catch (error) {
     console.error(error);
     showToast("Preferences could not be saved.");
@@ -1369,49 +1383,76 @@ function generatePosition(sideToMove) {
 }
 
 async function generateBalancedPosition(sideToMove, token) {
-  let bestCandidate = null;
+  const deadline = performance.now() + POSITION_GENERATION_TIMEOUT_MS;
+  let attempt = 0;
 
-  for (let attempt = 1; attempt <= 24; attempt += 1) {
+  while (performance.now() < deadline) {
     if (token !== state.taskToken) {
       return null;
     }
 
+    const remainingBeforeSearch = deadline - performance.now();
+    if (remainingBeforeSearch < 220) {
+      break;
+    }
+
+    attempt += 1;
+    setStatus(`Finding a balanced position... attempt ${attempt}`);
     const fen = generatePosition(sideToMove);
     const probe = new Chess();
     if (!probe.load(fen)) {
       continue;
     }
 
-    const result = await state.analysisEngine.search(fen, {
-      ...ANALYSIS_PROFILE,
-      depth: state.positionDepth,
-      moveTime: Math.max(250, Math.min(700, state.positionDepth * 45)),
+    const screenProfile = {
+      ...POSITION_SCREEN_PROFILE,
+      depth: clamp(Number(state.positionDepth) || POSITION_SCREEN_PROFILE.depth, 8, 12),
+      moveTime: Math.min(
+        POSITION_SCREEN_PROFILE.moveTime,
+        Math.max(120, Math.floor(remainingBeforeSearch - 80))
+      ),
+    };
+    const screenResult = await state.analysisEngine.search(fen, screenProfile);
+    if (token !== state.taskToken) {
+      return null;
+    }
+    if (!screenResult.score || screenResult.score.type !== "cp") {
+      continue;
+    }
+
+    const screenScore = normalizeScoreForWhite(screenResult.score, probe.turn());
+    if (Math.abs(screenScore.value) > POSITION_SCREEN_LIMIT_CP) {
+      continue;
+    }
+
+    const remainingBeforeConfirmation = deadline - performance.now();
+    if (remainingBeforeConfirmation < 220) {
+      break;
+    }
+
+    const confirmResult = await state.analysisEngine.search(fen, {
+      ...POSITION_CONFIRM_PROFILE,
+      moveTime: Math.min(
+        POSITION_CONFIRM_PROFILE.moveTime,
+        Math.max(120, Math.floor(remainingBeforeConfirmation - 80))
+      ),
     });
     if (token !== state.taskToken) {
       return null;
     }
 
-    if (!result.score || result.score.type !== "cp") {
+    if (!confirmResult.score || confirmResult.score.type !== "cp") {
       continue;
     }
 
-    const normalized = normalizeScoreForWhite(result.score, probe.turn());
+    const normalized = normalizeScoreForWhite(confirmResult.score, probe.turn());
     const distance = Math.abs(normalized.value);
-
-    if (!bestCandidate || distance < bestCandidate.distance) {
-      bestCandidate = {
-        distance,
-        fen,
-        score: normalized,
-      };
-    }
-
-    if (distance <= 200) {
-      return bestCandidate;
+    if (distance <= POSITION_ACCEPTANCE_CP) {
+      return { fen, score: normalized };
     }
   }
 
-  return bestCandidate;
+  return null;
 }
 
 async function startNewGame() {
@@ -1429,13 +1470,11 @@ async function startNewGame() {
         ? "w"
         : "b"
       : state.requestedColor
-    : state.initialFen
-      ? state.initialColor
-      : state.requestedColor === "random"
-        ? Math.random() < 0.5
-          ? "w"
-          : "b"
-        : state.requestedColor;
+    : state.requestedColor === "random"
+      ? Math.random() < 0.5
+        ? "w"
+        : "b"
+      : state.requestedColor;
 
   state.actualPlayerColor = actualColor;
   state.board.orientation(actualColor === "w" ? "white" : "black");
@@ -1444,12 +1483,10 @@ async function startNewGame() {
   try {
     const candidate = state.pendingStartFen
       ? { fen: state.pendingStartFen, score: null }
-      : state.initialFen
-        ? { fen: state.initialFen, score: null }
-      : { fen: generatePosition(actualColor), score: null };
+      : await generateBalancedPosition(actualColor, token);
     if (!candidate || token !== state.taskToken) {
       if (token === state.taskToken) {
-        setStatus("Could not generate a valid position. Try again.");
+        setStatus("Could not find a balanced position within 15 seconds. Try again.");
       }
       return;
     }
@@ -1997,6 +2034,7 @@ function bindEvents() {
 
   ui.evalToggle.addEventListener("click", async () => {
     state.evalVisible = !state.evalVisible;
+    state.evalVisibilityConfigured = true;
     void persistPreferences();
     syncEvalVisibility();
     if (state.evalVisible) {
@@ -2006,6 +2044,7 @@ function bindEvents() {
 
   ui.evalSettingToggle.addEventListener("click", async () => {
     state.evalVisible = !state.evalVisible;
+    state.evalVisibilityConfigured = true;
     void persistPreferences();
     syncEvalVisibility();
     if (state.evalVisible) {
@@ -2050,6 +2089,9 @@ function bindEvents() {
 async function init() {
   try {
     Object.assign(state, await getPreferences());
+    if (!state.evalVisibilityConfigured) {
+      state.evalVisible = false;
+    }
     state.aiStrength = normalizeLevel(state.aiStrength);
     state.moveAnimation = state.moveAnimation === "instant" ? "instant" : "slide";
     state.positionDepth = Number(state.positionDepth) || 12;

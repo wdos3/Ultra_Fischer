@@ -9,7 +9,8 @@ const BACKUP_VERSION = 1;
 
 const DEFAULT_PREFERENCES = Object.freeze({
   aiStrength: "4",
-  evalVisible: true,
+  evalVisible: false,
+  evalVisibilityConfigured: false,
   moveAnimation: "slide",
   positionDepth: 12,
   requestedColor: "w",
@@ -181,7 +182,11 @@ function readPreferences() {
     const legacyRaw = localStorage.getItem(LEGACY_PREFERENCES_KEY);
     const raw = currentRaw || legacyRaw;
     if (raw) {
-      const preferences = { ...DEFAULT_PREFERENCES, ...JSON.parse(raw) };
+      const storedPreferences = JSON.parse(raw);
+      const preferences = { ...DEFAULT_PREFERENCES, ...storedPreferences };
+      if (!Object.prototype.hasOwnProperty.call(storedPreferences, "evalVisibilityConfigured")) {
+        preferences.evalVisible = false;
+      }
       preferences.moveAnimation = normalizeMoveAnimation(preferences.moveAnimation);
       if (!currentRaw) {
         localStorage.setItem(PREFERENCES_KEY, JSON.stringify(preferences));
@@ -190,7 +195,6 @@ function readPreferences() {
     }
     const legacy = {
       aiStrength: localStorage.getItem("ultra-fischer-ai-strength"),
-      evalVisible: localStorage.getItem("ultra-fischer-eval-visible"),
       moveAnimation: localStorage.getItem("ultra-fischer-move-animation"),
       positionDepth: localStorage.getItem("ultra-fischer-position-depth"),
       requestedColor: localStorage.getItem("ultra-fischer-requested-color"),
@@ -200,7 +204,6 @@ function readPreferences() {
     const migrated = {
       ...DEFAULT_PREFERENCES,
       ...(legacy.aiStrength ? { aiStrength: legacy.aiStrength } : {}),
-      ...(legacy.evalVisible ? { evalVisible: legacy.evalVisible !== "false" } : {}),
       ...(legacy.moveAnimation ? { moveAnimation: normalizeMoveAnimation(legacy.moveAnimation) } : {}),
       ...(legacy.positionDepth ? { positionDepth: Number(legacy.positionDepth) } : {}),
       ...(legacy.requestedColor ? { requestedColor: legacy.requestedColor } : {}),

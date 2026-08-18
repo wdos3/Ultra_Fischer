@@ -357,7 +357,7 @@ a:focus-visible {
   flex-direction: column;
   font-size: 15px;
   font-weight: 600;
-  left: 0;
+  left: 50%;
   line-height: 1.15;
   position: absolute;
   top: -30px;
@@ -384,13 +384,21 @@ a:focus-visible {
 }
 
 .action-button {
+  align-items: center;
+  line-height: 1;
   height: 30px;
   min-width: 30px;
 }
 
+.action-button > span {
+  display: block;
+  line-height: 1;
+}
+
 .hint-button {
   font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", sans-serif;
-  font-size: 20px;
+  font-size: 18px;
+  font-variant-emoji: text;
 }
 
 .compact-button,
@@ -861,10 +869,9 @@ body.eval-hidden .board-row {
   }
 
   .eval-readout {
-    left: auto;
-    right: 0;
+    left: 50%;
     top: -25px;
-    transform: none;
+    transform: translateX(-50%);
   }
 
   .micro-button {
