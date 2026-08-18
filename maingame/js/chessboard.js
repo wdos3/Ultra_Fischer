@@ -9,7 +9,7 @@ import {
   getBishopPlacementCandidates,
   getSquareColor,
 } from "./position-utils.mjs";
-import { initAuth } from "./auth.js";
+import { initAuth } from "./auth.js?v=auth-8-32";
 
 const STORAGE_KEYS = {
   aiStrength: "ultra-fischer-ai-strength",
