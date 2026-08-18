@@ -123,7 +123,6 @@ a:focus-visible {
 .game-panel-head,
 .record-summary,
 .overlay-head,
-.player-strip,
 .board-actions,
 .setup-actions,
 .setting-toggle-row {
@@ -430,19 +429,6 @@ a:focus-visible {
   color: var(--danger);
 }
 
-.player-strip {
-  color: var(--muted);
-  font-size: 11px;
-  gap: 7px;
-  justify-content: center;
-  margin-top: 7px;
-}
-
-.player-strip strong {
-  color: var(--text);
-  font-weight: 500;
-}
-
 .game-panel {
   background: var(--bg-panel);
   border: 1px solid var(--border);
@@ -483,11 +469,46 @@ a:focus-visible {
 
 .record-summary {
   border-bottom: 1px solid var(--border);
-  color: var(--muted);
+  color: var(--text);
   font-size: 11px;
   gap: 8px;
   justify-content: space-between;
   padding: 8px 12px;
+}
+
+.record-badge {
+  align-items: center;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 7px;
+}
+
+.record-badge::before {
+  border: 1px solid currentColor;
+  content: "";
+  display: inline-block;
+  height: 8px;
+  width: 8px;
+}
+
+.record-color.is-white,
+.record-turn.is-white {
+  background: rgba(240, 237, 228, 0.12);
+  color: var(--text);
+}
+
+.record-color.is-black,
+.record-turn.is-black {
+  background: rgba(15, 14, 12, 0.45);
+  color: var(--muted);
+}
+
+.record-turn {
+  border-color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+  font-weight: 600;
 }
 
 .history-table {
@@ -945,10 +966,6 @@ body.eval-hidden .board-row {
     flex: 1;
   }
 
-  .player-strip {
-    margin-top: 5px;
-  }
-
   .overlay {
     align-items: end;
     padding: 0;
@@ -980,10 +997,6 @@ body.eval-hidden .board-row {
 @media (max-height: 460px) and (orientation: landscape) {
   :root {
     --board-size: min(82vw, calc(100dvh - 150px), 480px);
-  }
-
-  .player-strip {
-    display: none;
   }
 
   .game-shell {

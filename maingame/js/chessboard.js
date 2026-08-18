@@ -110,7 +110,6 @@ const ui = {
   newGame: document.getElementById("new-game"),
   newGameDialog: document.getElementById("new-game-dialog"),
   opponentLabel: document.getElementById("opponent-label"),
-  playerColorLabel: document.getElementById("player-color-label"),
   recordColor: document.getElementById("record-color"),
   recordTurn: document.getElementById("record-turn"),
   positionDepth: document.getElementById("position-depth"),
@@ -127,7 +126,6 @@ const ui = {
   themeToggle: document.getElementById("theme-toggle"),
   toast: document.getElementById("toast"),
   toggleMode: document.getElementById("toggle-mode"),
-  turnLabel: document.getElementById("turn-label"),
   undo: document.getElementById("undo"),
   setupClose: document.getElementById("setup-close"),
   setupLevelLabel: document.getElementById("setup-level-label"),
@@ -908,11 +906,15 @@ async function finishMatch(message, overrides = {}) {
 }
 
 function updateSideLabels() {
-  ui.playerColorLabel.textContent = sideName(state.actualPlayerColor);
   const turn = `${sideName(game.turn())} to move`;
-  ui.turnLabel.textContent = turn;
   ui.recordColor.textContent = `You: ${sideName(state.actualPlayerColor)}`;
+  ui.recordColor.dataset.side = state.actualPlayerColor;
+  ui.recordColor.classList.toggle("is-white", state.actualPlayerColor === "w");
+  ui.recordColor.classList.toggle("is-black", state.actualPlayerColor === "b");
   ui.recordTurn.textContent = turn;
+  ui.recordTurn.dataset.side = game.turn();
+  ui.recordTurn.classList.toggle("is-white", game.turn() === "w");
+  ui.recordTurn.classList.toggle("is-black", game.turn() === "b");
 }
 
 function renderMoveCell(cell, move) {
@@ -921,7 +923,7 @@ function renderMoveCell(cell, move) {
   }
   const image = document.createElement("img");
   image.className = "move-piece-icon";
-  image.src = `maingame/img/chesspieces/wikipedia/${move.color === "w" ? "w" + move.piece.toUpperCase() : "b" + move.piece}.png`;
+  image.src = `maingame/img/chesspieces/wikipedia/${move.color === "w" ? "w" : "b"}${move.piece.toUpperCase()}.png`;
   image.alt = "";
   image.setAttribute("aria-hidden", "true");
   image.title = move.san;
@@ -1734,9 +1736,9 @@ function createBoard() {
       state.board.position(game.fen(), false);
     },
     dragThrottleRate: 8,
-    moveSpeed: state.moveAnimation === "slide" ? 110 : 0,
-    snapSpeed: state.moveAnimation === "slide" ? 80 : 0,
-    snapbackSpeed: state.moveAnimation === "slide" ? 80 : 0,
+    moveSpeed: state.moveAnimation === "slide" ? 180 : 0,
+    snapSpeed: state.moveAnimation === "slide" ? 140 : 0,
+    snapbackSpeed: state.moveAnimation === "slide" ? 140 : 0,
     orientation: "white",
     pieceTheme: "maingame/img/chesspieces/wikipedia/{piece}.png",
     position: "start",

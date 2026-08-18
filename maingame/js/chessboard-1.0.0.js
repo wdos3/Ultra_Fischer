@@ -905,6 +905,46 @@
     // Animations
     // -------------------------------------------------------------------------
 
+    var requestFrame = window.requestAnimationFrame
+      ? function (callback) { return window.requestAnimationFrame(callback) }
+      : function (callback) { return window.setTimeout(function () { callback(Date.now()) }, 1000 / 60) }
+
+    function animateElementToOffset ($element, target, duration, completeFn) {
+      var element = $element[0]
+      var startLeft = parseFloat($element.css('left')) || 0
+      var startTop = parseFloat($element.css('top')) || 0
+      var deltaLeft = target.left - startLeft
+      var deltaTop = target.top - startTop
+      var animationDuration = Math.max(0, Number(duration) || 0)
+
+      if (animationDuration === 0) {
+        $element.css({ left: target.left, top: target.top, transform: '' })
+        if (isFunction(completeFn)) completeFn()
+        return
+      }
+
+      var startTime = null
+      element.style.willChange = 'transform'
+
+      function step (timestamp) {
+        if (startTime === null) startTime = timestamp
+        var progress = Math.min(1, (timestamp - startTime) / animationDuration)
+        var eased = 1 - Math.pow(1 - progress, 3)
+        element.style.transform = 'translate3d(' + (deltaLeft * eased) + 'px,' + (deltaTop * eased) + 'px,0)'
+
+        if (progress < 1) {
+          requestFrame(step)
+          return
+        }
+
+        $element.css({ left: target.left, top: target.top, transform: '' })
+        element.style.willChange = 'auto'
+        if (isFunction(completeFn)) completeFn()
+      }
+
+      requestFrame(step)
+    }
+
     function animateSquareToSquare (src, dest, piece, completeFn) {
       // get information about the source and destination squares
       var $srcSquare = $('#' + squareElsIds[src])
@@ -940,12 +980,7 @@
         }
       }
 
-      // animate the piece to the destination square
-      var opts = {
-        duration: config.moveSpeed,
-        complete: onFinishAnimation1
-      }
-      $animatedPiece.animate(destSquarePosition, opts)
+      animateElementToOffset($animatedPiece, destSquarePosition, config.moveSpeed, onFinishAnimation1)
     }
 
     function animateSparePieceToSquare (piece, dest, completeFn) {
@@ -979,12 +1014,7 @@
         }
       }
 
-      // animate the piece to the destination square
-      var opts = {
-        duration: config.moveSpeed,
-        complete: onFinishAnimation2
-      }
-      $animatedPiece.animate(destOffset, opts)
+      animateElementToOffset($animatedPiece, destOffset, config.moveSpeed, onFinishAnimation2)
     }
 
     // execute an array of animations
@@ -1213,12 +1243,7 @@
       // get source square position
       var sourceSquarePosition = $('#' + squareElsIds[draggedPieceSource]).offset()
 
-      // animate the piece to the target square
-      var opts = {
-        duration: config.snapbackSpeed,
-        complete: complete
-      }
-      $draggedPiece.animate(sourceSquarePosition, opts)
+      animateElementToOffset($draggedPiece, sourceSquarePosition, config.snapbackSpeed, complete)
 
       // set state
       isDragging = false
@@ -1265,12 +1290,7 @@
         }
       }
 
-      // snap the piece to the target square
-      var opts = {
-        duration: config.snapSpeed,
-        complete: onAnimationComplete
-      }
-      $draggedPiece.animate(targetSquarePosition, opts)
+      animateElementToOffset($draggedPiece, targetSquarePosition, config.snapSpeed, onAnimationComplete)
 
       // set state
       isDragging = false
