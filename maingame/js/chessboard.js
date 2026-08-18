@@ -144,6 +144,8 @@ const state = {
   currentGameId: null,
   currentGameFavorite: false,
   currentStartingFen: null,
+  initialFen: null,
+  initialColor: null,
   pendingStartFen: null,
   resumeRecord: null,
   replay: { board: null, game: null, record: null, index: 0 },
@@ -1360,12 +1362,19 @@ async function startNewGame() {
   setBusy(true);
   updateEvalBar(null);
 
-  const actualColor =
-    state.requestedColor === "random"
+  const actualColor = state.pendingStartFen
+    ? state.requestedColor === "random"
       ? Math.random() < 0.5
         ? "w"
         : "b"
-      : state.requestedColor;
+      : state.requestedColor
+    : state.initialFen
+      ? state.initialColor
+      : state.requestedColor === "random"
+        ? Math.random() < 0.5
+          ? "w"
+          : "b"
+        : state.requestedColor;
 
   state.actualPlayerColor = actualColor;
   state.board.orientation(actualColor === "w" ? "white" : "black");
@@ -1374,6 +1383,8 @@ async function startNewGame() {
   try {
     const candidate = state.pendingStartFen
       ? { fen: state.pendingStartFen, score: null }
+      : state.initialFen
+        ? { fen: state.initialFen, score: null }
       : { fen: generatePosition(actualColor), score: null };
     if (!candidate || token !== state.taskToken) {
       if (token === state.taskToken) {
@@ -1384,6 +1395,7 @@ async function startNewGame() {
 
     game.load(candidate.fen);
     state.pendingStartFen = null;
+    state.initialFen = null;
     await createLocalGame(candidate.fen, candidate.score);
     state.board.position(game.fen(), false);
     renderMoveHistory();
@@ -1844,6 +1856,19 @@ async function init() {
   createBoard();
   bindEvents();
   updateEvalBar(null);
+
+  const previewColor = state.requestedColor === "random"
+    ? (Math.random() < 0.5 ? "w" : "b")
+    : state.requestedColor;
+  state.actualPlayerColor = previewColor;
+  state.initialColor = previewColor;
+  state.initialFen = generatePosition(previewColor);
+  game.load(state.initialFen);
+  state.board.orientation(previewColor === "w" ? "white" : "black");
+  state.board.position(state.initialFen, false);
+  renderMoveHistory();
+  updateSideLabels();
+  setStatus("Loading Stockfish...");
 
   try {
     setStatus("Loading Stockfish...");
