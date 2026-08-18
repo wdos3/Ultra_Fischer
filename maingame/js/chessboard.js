@@ -9,6 +9,7 @@ import {
   getBishopPlacementCandidates,
   getSquareColor,
 } from "./position-utils.mjs";
+import { initAuth } from "./auth.js";
 
 const STORAGE_KEYS = {
   aiStrength: "ultra-fischer-ai-strength",
@@ -1140,6 +1141,7 @@ function bindEvents() {
 }
 
 async function init() {
+  initAuth();
   syncTheme();
   syncEvalVisibility();
   syncColorButtons();

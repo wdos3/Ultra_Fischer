@@ -1,0 +1,11 @@
+{
+  "name": "ultra-fischer",
+  "private": true,
+  "scripts": {
+    "test": "node --test api/_lib/auth.test.mjs maingame/js/stockfish-config.test.mjs maingame/js/position-utils.test.mjs",
+    "check": "node --check api/_lib/auth.js && node --check api/auth/[action].js && node --check maingame/js/auth.js && node --check maingame/js/chessboard.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

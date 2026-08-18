@@ -21,6 +21,11 @@
       </a>
       <div class="header-actions">
         <span class="header-note">Randomized chess</span>
+        <nav class="auth-nav" aria-label="Account">
+          <button id="sign-in-button" class="compact-button header-auth-button" type="button">Sign in</button>
+          <button id="register-button" class="compact-button header-auth-button primary" type="button">Register</button>
+          <button id="account-button" class="compact-button header-auth-button hidden" type="button" aria-expanded="false">Account</button>
+        </nav>
         <button
           id="settings-toggle"
           class="icon-button"
@@ -178,6 +183,141 @@
           </div>
         </div>
         <p class="overlay-footnote">Settings apply to the next engine request. The evaluation and hint engine stays independent of your opponent level.</p>
+      </div>
+    </section>
+
+    <section id="auth-dialog" class="overlay hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <div class="overlay-surface auth-surface">
+        <div class="overlay-head">
+          <div>
+            <span class="panel-kicker">Ultra Fischer account</span>
+            <h2 id="auth-title">Sign in</h2>
+          </div>
+          <button id="auth-close" class="icon-button" type="button" aria-label="Close account dialog" title="Close account dialog">
+            <span aria-hidden="true">&#10005;</span>
+          </button>
+        </div>
+
+        <p id="auth-status" class="auth-status" aria-live="polite"></p>
+
+        <div class="auth-view" data-auth-view="login">
+          <p class="auth-intro">Sign in to keep your account ready on any device.</p>
+          <form id="login-form" class="auth-form" novalidate>
+            <label class="auth-field" for="login-email">
+              <span>Email</span>
+              <input id="login-email" name="email" type="email" autocomplete="email" maxlength="254" required />
+            </label>
+            <label class="auth-field" for="login-password">
+              <span>Password</span>
+              <span class="password-input">
+                <input id="login-password" name="password" type="password" autocomplete="current-password" required />
+                <button class="password-toggle" data-target="login-password" type="button">Show</button>
+              </span>
+            </label>
+            <button class="compact-button primary auth-submit" type="submit">Sign in</button>
+          </form>
+          <div class="auth-links">
+            <button class="text-button" data-auth-open="forgot" type="button">Forgot password?</button>
+            <button class="text-button" data-auth-open="register" type="button">Create an account</button>
+          </div>
+        </div>
+
+        <div class="auth-view hidden" data-auth-view="register">
+          <p class="auth-intro">Create an account. Guest play stays available without one.</p>
+          <form id="register-form" class="auth-form" novalidate>
+            <label class="auth-field" for="register-email">
+              <span>Email</span>
+              <input id="register-email" name="email" type="email" autocomplete="email" maxlength="254" required />
+            </label>
+            <label class="auth-field" for="register-password">
+              <span>Password <small>15+ characters</small></span>
+              <span class="password-input">
+                <input id="register-password" name="password" type="password" autocomplete="new-password" minlength="15" required />
+                <button class="password-toggle" data-target="register-password" type="button">Show</button>
+              </span>
+            </label>
+            <label class="auth-field" for="register-confirm-password">
+              <span>Confirm password</span>
+              <input id="register-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="15" required />
+            </label>
+            <button class="compact-button primary auth-submit" type="submit">Create account</button>
+          </form>
+          <div class="auth-links auth-links-single">
+            <button class="text-button" data-auth-open="login" type="button">Already have an account? Sign in</button>
+          </div>
+        </div>
+
+        <div class="auth-view hidden" data-auth-view="verify">
+          <p class="auth-intro">Enter the 6-digit code sent to <strong id="verification-email">your email address</strong>.</p>
+          <form id="verify-form" class="auth-form" novalidate>
+            <label class="auth-field" for="verification-code">
+              <span>Verification code</span>
+              <input id="verification-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required />
+            </label>
+            <button class="compact-button primary auth-submit" type="submit">Confirm email</button>
+          </form>
+          <div class="auth-links auth-links-single">
+            <button id="resend-code" class="text-button" type="button">Resend code</button>
+          </div>
+        </div>
+
+        <div class="auth-view hidden" data-auth-view="forgot">
+          <p class="auth-intro">Enter your email and we will send a password reset link if the account exists.</p>
+          <form id="forgot-form" class="auth-form" novalidate>
+            <label class="auth-field" for="forgot-email">
+              <span>Email</span>
+              <input id="forgot-email" name="email" type="email" autocomplete="email" maxlength="254" required />
+            </label>
+            <button class="compact-button primary auth-submit" type="submit">Send reset link</button>
+          </form>
+          <div class="auth-links auth-links-single">
+            <button class="text-button" data-auth-open="login" type="button">Back to sign in</button>
+          </div>
+        </div>
+
+        <div class="auth-view hidden" data-auth-view="reset">
+          <p class="auth-intro">Choose a new password for your account.</p>
+          <form id="reset-form" class="auth-form" novalidate>
+            <label class="auth-field" for="reset-password">
+              <span>New password <small>15+ characters</small></span>
+              <span class="password-input">
+                <input id="reset-password" name="password" type="password" autocomplete="new-password" minlength="15" required />
+                <button class="password-toggle" data-target="reset-password" type="button">Show</button>
+              </span>
+            </label>
+            <label class="auth-field" for="reset-confirm-password">
+              <span>Confirm password</span>
+              <input id="reset-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="15" required />
+            </label>
+            <button class="compact-button primary auth-submit" type="submit">Update password</button>
+          </form>
+        </div>
+
+        <div class="auth-view hidden" data-auth-view="account">
+          <p class="auth-intro">Signed in as <strong id="account-email">your email address</strong>.</p>
+          <form id="change-password-form" class="auth-form" novalidate>
+            <label class="auth-field" for="current-password">
+              <span>Current password</span>
+              <span class="password-input">
+                <input id="current-password" name="currentPassword" type="password" autocomplete="current-password" required />
+                <button class="password-toggle" data-target="current-password" type="button">Show</button>
+              </span>
+            </label>
+            <label class="auth-field" for="change-password">
+              <span>New password <small>15+ characters</small></span>
+              <span class="password-input">
+                <input id="change-password" name="password" type="password" autocomplete="new-password" minlength="15" required />
+                <button class="password-toggle" data-target="change-password" type="button">Show</button>
+              </span>
+            </label>
+            <label class="auth-field" for="change-confirm-password">
+              <span>Confirm password</span>
+              <input id="change-confirm-password" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="15" required />
+            </label>
+            <button class="compact-button secondary auth-submit" type="submit">Change password</button>
+          </form>
+          <button id="logout-button" class="compact-button danger auth-logout" type="button">Sign out</button>
+        </div>
       </div>
     </section>
 
