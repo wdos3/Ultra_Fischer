@@ -147,6 +147,8 @@ const state = {
   pendingStartFen: null,
   resumeRecord: null,
   replay: { board: null, game: null, record: null, index: 0 },
+  selectedSquare: null,
+  suppressClickUntil: 0,
 };
 
 class StockfishEngine {
@@ -186,7 +188,7 @@ class StockfishEngine {
       let settled = false;
       const timeoutId = window.setTimeout(() => {
         fail(new Error(`Stockfish worker timed out while loading (${source}).`));
-      }, 15000);
+      }, 8000);
       const cleanup = () => {
         window.clearTimeout(timeoutId);
         this.initResolver = null;
@@ -1110,7 +1112,7 @@ async function runComputerTurn(token) {
       promotion: result.bestMove[4] || "q",
     };
     game.move(move);
-    state.board.position(game.fen());
+    state.board.position(game.fen(), true);
     renderMoveHistory();
     updateSideLabels();
     await persistCurrentGameQuietly();
@@ -1367,12 +1369,12 @@ async function startNewGame() {
 
   state.actualPlayerColor = actualColor;
   state.board.orientation(actualColor === "w" ? "white" : "black");
-  setStatus(state.pendingStartFen ? "Loading saved position..." : "Generating a balanced random position...");
+  setStatus(state.pendingStartFen ? "Loading saved position..." : "Preparing a randomized position...");
 
   try {
     const candidate = state.pendingStartFen
       ? { fen: state.pendingStartFen, score: null }
-      : await generateBalancedPosition(actualColor, token);
+      : { fen: generatePosition(actualColor), score: null };
     if (!candidate || token !== state.taskToken) {
       if (token === state.taskToken) {
         setStatus("Could not generate a valid position. Try again.");
@@ -1388,6 +1390,12 @@ async function startNewGame() {
     updateSideLabels();
     updateEvalBar(candidate.score);
     setStatus(describeResult());
+    const evaluationToken = state.taskToken;
+    window.setTimeout(() => {
+      if (evaluationToken === state.taskToken && !state.isBusy) {
+        void refreshEvaluation(Math.min(8, Math.max(6, state.positionDepth)));
+      }
+    }, 900);
   } finally {
     if (token === state.taskToken) {
       setBusy(false);
@@ -1402,10 +1410,17 @@ function resignGame() {
   void finishMatch(`${winner} wins by resignation.`, { result: resultForWinner(winnerColor), termination: "resignation" });
 }
 
-function removeGreySquares() {
+function clearBoardHighlights() {
   document.querySelectorAll("#board .square-55d63").forEach((square) => {
     square.style.background = "";
+    square.classList.remove("click-selected", "click-target");
   });
+}
+
+function removeGreySquares() {
+  if (!state.selectedSquare) {
+    clearBoardHighlights();
+  }
 }
 
 function greySquare(square) {
@@ -1419,6 +1434,69 @@ function greySquare(square) {
     ? styles.getPropertyValue("--board-highlight-dark").trim()
     : styles.getPropertyValue("--board-highlight-light").trim();
   squareElement.style.background = background;
+}
+
+function canSelectSquare(square) {
+  const piece = game.get(square);
+  if (!piece || state.isBusy || state.matchOver || game.game_over()) {
+    return false;
+  }
+  return piece.color === game.turn() && (state.playerVsPlayer || piece.color === state.actualPlayerColor);
+}
+
+function showLegalMoves(square) {
+  clearBoardHighlights();
+  state.selectedSquare = square;
+  const source = document.querySelector(`#board .square-${square}`);
+  source?.classList.add("click-selected");
+  game.moves({ square, verbose: true }).forEach((move) => {
+    document.querySelector(`#board .square-${move.to}`)?.classList.add("click-target");
+  });
+}
+
+function commitMove(source, target, renderImmediately = false) {
+  const move = game.move({ from: source, to: target, promotion: "q" });
+  if (!move) {
+    return null;
+  }
+  state.selectedSquare = null;
+  clearBoardHighlights();
+  state.suppressClickUntil = Date.now() + 250;
+  state.taskToken += 1;
+  if (renderImmediately) {
+    state.board.position(game.fen(), false);
+  }
+  void afterMove();
+  return move;
+}
+
+function handleSquareClick(square) {
+  if (Date.now() < state.suppressClickUntil) {
+    return;
+  }
+  if (!state.selectedSquare) {
+    if (canSelectSquare(square)) {
+      showLegalMoves(square);
+    }
+    return;
+  }
+
+  if (square === state.selectedSquare) {
+    state.selectedSquare = null;
+    clearBoardHighlights();
+    return;
+  }
+
+  if (canSelectSquare(square)) {
+    showLegalMoves(square);
+    return;
+  }
+
+  const move = commitMove(state.selectedSquare, square, true);
+  if (!move) {
+    state.selectedSquare = null;
+    clearBoardHighlights();
+  }
 }
 
 async function afterMove() {
@@ -1465,23 +1543,19 @@ function createBoard() {
       return true;
     },
     onDrop(source, target) {
-      const move = game.move({
-        from: source,
-        to: target,
-        promotion: "q",
-      });
-      removeGreySquares();
+      const move = commitMove(source, target);
       if (move === null) {
         return "snapback";
       }
-      state.taskToken += 1;
-      void afterMove();
       return undefined;
     },
     onMouseoutSquare() {
       removeGreySquares();
     },
     onMouseoverSquare(square) {
+      if (state.selectedSquare) {
+        return;
+      }
       const moves = game.moves({
         square,
         verbose: true,
@@ -1495,14 +1569,29 @@ function createBoard() {
       });
     },
     onSnapEnd() {
-      state.board.position(game.fen());
+      state.board.position(game.fen(), false);
     },
+    dragThrottleRate: 8,
+    moveSpeed: 110,
+    snapSpeed: 80,
+    snapbackSpeed: 80,
     orientation: "white",
     pieceTheme: "maingame/img/chesspieces/wikipedia/{piece}.png",
     position: "start",
   };
 
   state.board = ChessBoard("board", config);
+  const handleBoardPress = (event) => {
+    if (event.type === "mousedown" && event.button !== 0) {
+      return;
+    }
+    const square = event.target.closest("[data-square]")?.dataset.square;
+    if (square) {
+      handleSquareClick(square);
+    }
+  };
+  ui.board.addEventListener("mousedown", handleBoardPress);
+  ui.board.addEventListener("touchstart", handleBoardPress, { passive: true });
   let resizeFrame = null;
   window.addEventListener("resize", () => {
     if (resizeFrame) {
@@ -1556,7 +1645,7 @@ function bindEvents() {
         break;
       }
     }
-    state.board.position(game.fen());
+    state.board.position(game.fen(), false);
     state.taskToken += 1;
     state.matchOver = false;
     updateSideLabels();
@@ -1757,10 +1846,10 @@ async function init() {
   updateEvalBar(null);
 
   try {
+    setStatus("Loading Stockfish...");
     state.opponentEngine = new StockfishEngine();
     await state.opponentEngine.ready();
-    state.analysisEngine = new StockfishEngine();
-    await state.analysisEngine.ready();
+    state.analysisEngine = state.opponentEngine;
     state.engineReady = true;
     setBusy(false);
     setStatus("Engine ready.");
