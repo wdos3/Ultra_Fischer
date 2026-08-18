@@ -7,6 +7,7 @@ const BACKUP_VERSION = 1;
 const DEFAULT_PREFERENCES = Object.freeze({
   aiStrength: "4",
   evalVisible: true,
+  moveAnimation: "slide",
   positionDepth: 12,
   requestedColor: "w",
   settingsOpen: false,
@@ -42,6 +43,10 @@ function makeId(prefix = "item") {
 
 function normalizeFen(fen) {
   return String(fen || "").trim().replace(/\s+/g, " ");
+}
+
+function normalizeMoveAnimation(value) {
+  return value === "instant" ? "instant" : "slide";
 }
 
 export function isValidFen(fen) {
@@ -119,11 +124,14 @@ function readPreferences() {
   try {
     const raw = localStorage.getItem(PREFERENCES_KEY);
     if (raw) {
-      return { ...DEFAULT_PREFERENCES, ...JSON.parse(raw) };
+      const preferences = { ...DEFAULT_PREFERENCES, ...JSON.parse(raw) };
+      preferences.moveAnimation = normalizeMoveAnimation(preferences.moveAnimation);
+      return preferences;
     }
     const legacy = {
       aiStrength: localStorage.getItem("ultra-fischer-ai-strength"),
       evalVisible: localStorage.getItem("ultra-fischer-eval-visible"),
+      moveAnimation: localStorage.getItem("ultra-fischer-move-animation"),
       positionDepth: localStorage.getItem("ultra-fischer-position-depth"),
       requestedColor: localStorage.getItem("ultra-fischer-requested-color"),
       settingsOpen: localStorage.getItem("ultra-fischer-settings-open"),
@@ -133,6 +141,7 @@ function readPreferences() {
       ...DEFAULT_PREFERENCES,
       ...(legacy.aiStrength ? { aiStrength: legacy.aiStrength } : {}),
       ...(legacy.evalVisible ? { evalVisible: legacy.evalVisible !== "false" } : {}),
+      ...(legacy.moveAnimation ? { moveAnimation: normalizeMoveAnimation(legacy.moveAnimation) } : {}),
       ...(legacy.positionDepth ? { positionDepth: Number(legacy.positionDepth) } : {}),
       ...(legacy.requestedColor ? { requestedColor: legacy.requestedColor } : {}),
       ...(legacy.settingsOpen ? { settingsOpen: legacy.settingsOpen === "true" } : {}),
@@ -152,6 +161,7 @@ export function getPreferences() {
 
 export function savePreferences(preferences) {
   const next = { ...DEFAULT_PREFERENCES, ...preferences };
+  next.moveAnimation = normalizeMoveAnimation(next.moveAnimation);
   try {
     localStorage.setItem(PREFERENCES_KEY, JSON.stringify(next));
   } catch (error) {
@@ -163,7 +173,7 @@ export function savePreferences(preferences) {
 export function resetPreferences() {
   try {
     localStorage.removeItem(PREFERENCES_KEY);
-    for (const key of ["ultra-fischer-ai-strength", "ultra-fischer-eval-visible", "ultra-fischer-position-depth", "ultra-fischer-requested-color", "ultra-fischer-settings-open", "ultra-fischer-theme"]) {
+    for (const key of ["ultra-fischer-ai-strength", "ultra-fischer-eval-visible", "ultra-fischer-move-animation", "ultra-fischer-position-depth", "ultra-fischer-requested-color", "ultra-fischer-settings-open", "ultra-fischer-theme"]) {
       localStorage.removeItem(key);
     }
   } catch (error) {
@@ -176,6 +186,7 @@ function cleanGame(record) {
   const now = Date.now();
   return {
     id: String(record.id || makeId("game")),
+    label: String(record.label || "Game").slice(0, 120),
     startingFen: normalizeFen(record.startingFen),
     currentFen: normalizeFen(record.currentFen || record.startingFen),
     playerColor: record.playerColor === "b" ? "b" : "w",
@@ -230,6 +241,16 @@ export async function setGameFavorite(id, isFavorite) {
   return updateGame(game);
 }
 
+export async function renameGame(id, label) {
+  const game = await getGame(id);
+  if (!game) {
+    return null;
+  }
+  game.label = String(label || "Game").trim().slice(0, 120) || "Game";
+  game.updatedAt = Date.now();
+  return updateGame(game);
+}
+
 export async function deleteGame(id) {
   return withStore("games", "readwrite", (store) => requestToPromise(store.delete(id)));
 }
@@ -271,6 +292,15 @@ export async function listSavedPositions() {
 
 export async function deleteSavedPosition(id) {
   return withStore("savedPositions", "readwrite", (store) => requestToPromise(store.delete(id)));
+}
+
+export async function renameSavedPosition(id, label) {
+  const position = await withStore("savedPositions", "readonly", (store) => requestToPromise(store.get(id)));
+  if (!position) {
+    return null;
+  }
+  position.label = String(label || "Saved position").trim().slice(0, 120) || "Saved position";
+  return withStore("savedPositions", "readwrite", (store) => requestToPromise(store.put(position)));
 }
 
 export async function clearSavedPositions() {
@@ -326,7 +356,9 @@ export function validateBackup(backup) {
       return null;
     }
   }).filter(Boolean);
-  return { games, savedPositions, preferences: { ...DEFAULT_PREFERENCES, ...(backup.preferences || {}) } };
+  const preferences = { ...DEFAULT_PREFERENCES, ...(backup.preferences || {}) };
+  preferences.moveAnimation = normalizeMoveAnimation(preferences.moveAnimation);
+  return { games, savedPositions, preferences };
 }
 
 export async function exportBackup() {

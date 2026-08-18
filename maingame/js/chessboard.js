@@ -23,6 +23,8 @@ import {
   importBackup,
   listGames,
   listSavedPositions,
+  renameGame,
+  renameSavedPosition,
   resetPreferences,
   savePosition,
   savePreferences,
@@ -45,6 +47,9 @@ function normalizeLevel(value) {
 const ui = {
   aiStrength: document.getElementById("ai-strength"),
   aiStrengthDetail: document.getElementById("ai-strength-detail"),
+  aboutClose: document.getElementById("about-close"),
+  aboutDialog: document.getElementById("about-dialog"),
+  aboutToggle: document.getElementById("about-toggle"),
   board: document.getElementById("board"),
   colorButtons: Array.from(document.querySelectorAll(".color-button")),
   evalDepth: document.getElementById("eval-depth"),
@@ -92,6 +97,7 @@ const ui = {
   downloadPgn: document.getElementById("download-pgn"),
   hintButton: document.getElementById("hint-button"),
   modePill: document.getElementById("mode-pill"),
+  moveAnimation: document.getElementById("move-animation"),
   moveHistory: document.getElementById("move-history"),
   newGame: document.getElementById("new-game"),
   newGameDialog: document.getElementById("new-game-dialog"),
@@ -100,6 +106,10 @@ const ui = {
   recordColor: document.getElementById("record-color"),
   recordTurn: document.getElementById("record-turn"),
   positionDepth: document.getElementById("position-depth"),
+  promotionClose: document.getElementById("promotion-close"),
+  promotionDetail: document.getElementById("promotion-detail"),
+  promotionDialog: document.getElementById("promotion-dialog"),
+  promotionOptions: document.getElementById("promotion-options"),
   resign: document.getElementById("resign"),
   settingsCard: document.getElementById("settings-card"),
   settingsClose: document.getElementById("settings-close"),
@@ -128,6 +138,7 @@ const state = {
   analysisEngine: null,
   engineReady: false,
   evalVisible: true,
+  moveAnimation: "slide",
   isBusy: true,
   lastEvalScore: null,
   matchOver: false,
@@ -143,6 +154,7 @@ const state = {
   opponentEngine: null,
   currentGameId: null,
   currentGameFavorite: false,
+  currentGameLabel: null,
   currentStartingFen: null,
   initialFen: null,
   initialColor: null,
@@ -151,6 +163,9 @@ const state = {
   replay: { board: null, game: null, record: null, index: 0 },
   selectedSquare: null,
   suppressClickUntil: 0,
+  boardInteractionBound: false,
+  resizeBound: false,
+  promotionRequest: null,
 };
 
 class StockfishEngine {
@@ -411,6 +426,7 @@ async function saveCurrentGame(overrides = {}) {
   const resultCode = result === "draw" ? "1/2-1/2" : result === "win" ? (state.actualPlayerColor === "w" ? "1-0" : "0-1") : result === "loss" ? (state.actualPlayerColor === "w" ? "0-1" : "1-0") : "*";
   const record = {
     id: state.currentGameId,
+    label: state.currentGameLabel || `Game ${formatDate(state.currentStartedAt || now)}`,
     startingFen: state.currentStartingFen,
     currentFen: game.fen(),
     playerColor: state.actualPlayerColor,
@@ -434,6 +450,7 @@ async function saveCurrentGame(overrides = {}) {
   state.currentStartedAt = saved.startedAt;
   state.currentFinishedAt = saved.finishedAt;
   state.currentGameFavorite = saved.isFavorite;
+  state.currentGameLabel = saved.label;
   return saved;
 }
 
@@ -453,6 +470,7 @@ async function createLocalGame(startingFen, score = null) {
   state.currentFinishedAt = null;
   state.currentInitialEvaluation = score;
   state.currentGameFavorite = false;
+  state.currentGameLabel = `Game ${formatDate(state.currentStartedAt)}`;
   await persistCurrentGameQuietly();
 }
 
@@ -496,7 +514,7 @@ function loadRecordIntoGame(record) {
 
 async function persistPreferences() {
   try {
-    await savePreferences({ aiStrength: state.aiStrength, evalVisible: state.evalVisible, positionDepth: state.positionDepth, requestedColor: state.requestedColor, settingsOpen: state.settingsOpen, theme: state.theme });
+    await savePreferences({ aiStrength: state.aiStrength, evalVisible: state.evalVisible, moveAnimation: state.moveAnimation, positionDepth: state.positionDepth, requestedColor: state.requestedColor, settingsOpen: state.settingsOpen, theme: state.theme });
   } catch (error) {
     console.error(error);
     showToast("Preferences could not be saved.");
@@ -511,6 +529,7 @@ function setCurrentRecord(record) {
   state.currentFinishedAt = record.finishedAt;
   state.currentInitialEvaluation = record.initialEvaluation || null;
   state.currentGameFavorite = Boolean(record.isFavorite);
+  state.currentGameLabel = record.label || `Game ${formatDate(record.startedAt)}`;
   state.actualPlayerColor = record.playerColor;
   state.aiStrength = normalizeLevel(record.stockfishLevel);
   state.matchOver = record.status === "completed";
@@ -550,6 +569,7 @@ function syncColorButtons() {
 function syncSettingsUI() {
   const level = getLevelConfig(state.aiStrength);
   ui.positionDepth.value = String(state.positionDepth);
+  ui.moveAnimation.value = state.moveAnimation;
   ui.aiStrength.value = state.aiStrength;
   ui.aiStrengthDetail.textContent = `Depth ${level.depth} · ${level.moveTime} ms search`;
   ui.setupLevelLabel.textContent = `Level ${state.aiStrength} · ${level.moveTime} ms`;
@@ -583,6 +603,18 @@ function makeButton(label, action, id) {
   return button;
 }
 
+function makeEditButton(action, id) {
+  const button = document.createElement("button");
+  button.className = "icon-button edit-record-button";
+  button.type = "button";
+  button.innerHTML = "&#9998;";
+  button.title = "Edit name";
+  button.setAttribute("aria-label", "Edit name");
+  button.dataset.recordAction = action;
+  button.dataset.recordId = id;
+  return button;
+}
+
 function renderHistoryList(games) {
   ui.historyList.innerHTML = "";
   if (!games.length) {
@@ -599,16 +631,17 @@ function renderHistoryList(games) {
     main.className = "record-item-main";
     const title = document.createElement("strong");
     title.className = "record-item-title";
-    title.textContent = `${record.status === "completed" ? record.result || "Finished" : "In progress"} - ${sideName(record.playerColor)} vs Level ${record.stockfishLevel}`;
+    title.textContent = record.label || `Game ${formatDate(record.startedAt)}`;
     const detail = document.createElement("span");
     detail.className = "record-item-detail";
-    detail.textContent = `${formatDate(record.updatedAt)} · ${record.moveCount || 0} moves${record.isFavorite ? " · Favorite" : ""}`;
+    detail.textContent = `${sideName(record.playerColor)} vs Level ${record.stockfishLevel} · ${formatDate(record.updatedAt)} · ${record.moveCount || 0} moves${record.isFavorite ? " · Favorite" : ""}`;
     const meta = document.createElement("span");
     meta.className = "record-item-meta";
     meta.textContent = record.termination ? record.termination.replaceAll("_", " ") : "In progress";
     main.append(title, detail, meta);
     const actions = document.createElement("div");
     actions.className = "record-item-actions";
+    actions.appendChild(makeEditButton("rename", record.id));
     const favorite = makeButton(record.isFavorite ? "Unfavorite" : "Favorite", "favorite", record.id);
     favorite.classList.add("favorite-button");
     actions.appendChild(favorite);
@@ -658,6 +691,7 @@ function renderPositionsList(positions) {
     main.append(title, detail, fen);
     const actions = document.createElement("div");
     actions.className = "record-item-actions";
+    actions.appendChild(makeEditButton("position-rename", position.id));
     const white = makeButton("Play White", "position-white", position.id);
     const black = makeButton("Play Black", "position-black", position.id);
     actions.append(white, black, makeButton("Delete", "position-delete", position.id));
@@ -1114,7 +1148,7 @@ async function runComputerTurn(token) {
       promotion: result.bestMove[4] || "q",
     };
     game.move(move);
-    state.board.position(game.fen(), true);
+    state.board.position(game.fen(), state.moveAnimation === "slide");
     renderMoveHistory();
     updateSideLabels();
     await persistCurrentGameQuietly();
@@ -1429,6 +1463,42 @@ function clearBoardHighlights() {
   });
 }
 
+function isPromotionMove(source, target) {
+  const piece = game.get(source);
+  return Boolean(piece && piece.type === "p" && ((piece.color === "w" && target[1] === "8") || (piece.color === "b" && target[1] === "1")));
+}
+
+function closePromotionDialog() {
+  state.promotionRequest = null;
+  closeOverlay(ui.promotionDialog);
+}
+
+function openPromotionDialog(source, target) {
+  const piece = game.get(source);
+  if (!piece) return;
+  state.promotionRequest = { source, target, renderImmediately: true };
+  ui.promotionDetail.textContent = `${sideName(piece.color)} pawn promotion. Choose a piece.`;
+  const pieceCode = (letter) => piece.color === "w" ? letter.toUpperCase() : letter;
+  ui.promotionOptions.querySelectorAll("[data-piece]").forEach((button) => {
+    const letter = button.dataset.piece;
+    const image = button.querySelector("img");
+    image.src = `maingame/img/chesspieces/wikipedia/${pieceCode(letter)}.png`;
+    image.alt = `${letter === "q" ? "Queen" : letter === "n" ? "Knight" : letter === "r" ? "Rook" : "Bishop"} promotion`;
+  });
+  openOverlay(ui.promotionDialog);
+}
+
+function choosePromotion(piece) {
+  const pending = state.promotionRequest;
+  if (!pending || !["q", "n", "r", "b"].includes(piece)) return;
+  closePromotionDialog();
+  const move = commitMove(pending.source, pending.target, pending.renderImmediately, piece);
+  if (!move) {
+    state.selectedSquare = null;
+    clearBoardHighlights();
+  }
+}
+
 function removeGreySquares() {
   if (!state.selectedSquare) {
     clearBoardHighlights();
@@ -1466,8 +1536,8 @@ function showLegalMoves(square) {
   });
 }
 
-function commitMove(source, target, renderImmediately = false) {
-  const move = game.move({ from: source, to: target, promotion: "q" });
+function commitMove(source, target, renderImmediately = false, promotion = "q") {
+  const move = game.move({ from: source, to: target, promotion });
   if (!move) {
     return null;
   }
@@ -1476,10 +1546,21 @@ function commitMove(source, target, renderImmediately = false) {
   state.suppressClickUntil = Date.now() + 250;
   state.taskToken += 1;
   if (renderImmediately) {
-    state.board.position(game.fen(), false);
+    state.board.position(game.fen(), state.moveAnimation === "slide");
   }
   void afterMove();
   return move;
+}
+
+function attemptMove(source, target, renderImmediately = false) {
+  const legal = game.moves({ square: source, verbose: true }).some((move) => move.to === target);
+  if (legal && isPromotionMove(source, target)) {
+    state.selectedSquare = null;
+    clearBoardHighlights();
+    openPromotionDialog(source, target);
+    return "pending";
+  }
+  return commitMove(source, target, renderImmediately);
 }
 
 function handleSquareClick(square) {
@@ -1504,7 +1585,7 @@ function handleSquareClick(square) {
     return;
   }
 
-  const move = commitMove(state.selectedSquare, square, true);
+  const move = attemptMove(state.selectedSquare, square, true);
   if (!move) {
     state.selectedSquare = null;
     clearBoardHighlights();
@@ -1555,8 +1636,8 @@ function createBoard() {
       return true;
     },
     onDrop(source, target) {
-      const move = commitMove(source, target);
-      if (move === null) {
+      const move = attemptMove(source, target);
+      if (move === null || move === "pending") {
         return "snapback";
       }
       return undefined;
@@ -1584,36 +1665,53 @@ function createBoard() {
       state.board.position(game.fen(), false);
     },
     dragThrottleRate: 8,
-    moveSpeed: 110,
-    snapSpeed: 80,
-    snapbackSpeed: 80,
+    moveSpeed: state.moveAnimation === "slide" ? 110 : 0,
+    snapSpeed: state.moveAnimation === "slide" ? 80 : 0,
+    snapbackSpeed: state.moveAnimation === "slide" ? 80 : 0,
     orientation: "white",
     pieceTheme: "maingame/img/chesspieces/wikipedia/{piece}.png",
     position: "start",
   };
 
   state.board = ChessBoard("board", config);
-  const handleBoardPress = (event) => {
-    if (event.type === "mousedown" && event.button !== 0) {
-      return;
-    }
-    const square = event.target.closest("[data-square]")?.dataset.square;
-    if (square) {
-      handleSquareClick(square);
-    }
-  };
-  ui.board.addEventListener("mousedown", handleBoardPress);
-  ui.board.addEventListener("touchstart", handleBoardPress, { passive: true });
-  let resizeFrame = null;
-  window.addEventListener("resize", () => {
-    if (resizeFrame) {
-      cancelAnimationFrame(resizeFrame);
-    }
-    resizeFrame = requestAnimationFrame(() => {
-      state.board.resize();
-      updateEvalBar(state.lastEvalScore);
+  if (!state.boardInteractionBound) {
+    const handleBoardPress = (event) => {
+      if (event.type === "mousedown" && event.button !== 0) {
+        return;
+      }
+      const square = event.target.closest("[data-square]")?.dataset.square;
+      if (square) {
+        handleSquareClick(square);
+      }
+    };
+    ui.board.addEventListener("mousedown", handleBoardPress);
+    ui.board.addEventListener("touchstart", handleBoardPress, { passive: true });
+    state.boardInteractionBound = true;
+  }
+  if (!state.resizeBound) {
+    let resizeFrame = null;
+    window.addEventListener("resize", () => {
+      if (resizeFrame) {
+        cancelAnimationFrame(resizeFrame);
+      }
+      resizeFrame = requestAnimationFrame(() => {
+        state.board.resize();
+        updateEvalBar(state.lastEvalScore);
+      });
     });
-  });
+    state.resizeBound = true;
+  }
+}
+
+function rebuildBoard() {
+  const position = game.fen();
+  const orientation = state.actualPlayerColor === "w" ? "white" : "black";
+  state.board?.destroy?.();
+  state.board = null;
+  createBoard();
+  state.board.orientation(orientation);
+  state.board.position(position, false);
+  clearBoardHighlights();
 }
 
 function closeSettings() {
@@ -1714,6 +1812,18 @@ function bindEvents() {
     syncTheme();
   });
 
+  ui.moveAnimation.addEventListener("change", () => {
+    state.moveAnimation = ui.moveAnimation.value === "instant" ? "instant" : "slide";
+    void persistPreferences();
+    rebuildBoard();
+  });
+
+  ui.aboutToggle.addEventListener("click", () => openOverlay(ui.aboutDialog));
+  ui.aboutClose.addEventListener("click", () => closeOverlay(ui.aboutDialog));
+  ui.aboutDialog.addEventListener("click", (event) => {
+    if (event.target === ui.aboutDialog) closeOverlay(ui.aboutDialog);
+  });
+
   ui.settingsToggle.addEventListener("click", () => {
     if (ui.appMenu.classList.contains("hidden")) openAppMenu(); else closeAppMenu();
   });
@@ -1734,6 +1844,15 @@ function bindEvents() {
     const record = (await listGames()).find((item) => item.id === button.dataset.recordId);
     if (!record) return;
     const action = button.dataset.recordAction;
+    if (action === "rename") {
+      const label = window.prompt("Name this game", record.label || `Game ${formatDate(record.startedAt)}`);
+      if (label?.trim()) {
+        const renamed = await renameGame(record.id, label);
+        if (record.id === state.currentGameId && renamed) state.currentGameLabel = renamed.label;
+      }
+      await refreshHistoryList();
+      return;
+    }
     if (action === "favorite") {
       await setGameFavorite(record.id, !record.isFavorite);
       if (record.id === state.currentGameId) state.currentGameFavorite = !record.isFavorite;
@@ -1752,6 +1871,12 @@ function bindEvents() {
     if (!button) return;
     const position = (await listSavedPositions()).find((item) => item.id === button.dataset.recordId);
     if (!position) return;
+    if (button.dataset.recordAction === "position-rename") {
+      const label = window.prompt("Name this saved position", position.label);
+      if (label?.trim()) await renameSavedPosition(position.id, label);
+      await refreshPositionsList();
+      return;
+    }
     if (button.dataset.recordAction === "position-delete") { if (window.confirm("Delete this saved position?")) await deleteSavedPosition(position.id); await refreshPositionsList(); return; }
     preparePlayAgain(position.fen, button.dataset.recordAction === "position-black" ? "b" : "w", position.stockfishLevel);
     closeOverlay(ui.positionsDialog);
@@ -1759,6 +1884,14 @@ function bindEvents() {
   ui.resumeGame.addEventListener("click", async () => { if (!state.resumeRecord) return; try { setCurrentRecord(state.resumeRecord); closeOverlay(ui.resumeDialog); if (!state.matchOver && !state.playerVsPlayer && game.turn() !== state.actualPlayerColor) { setBusy(true); await runComputerTurn(++state.taskToken); setBusy(false); } } catch (error) { console.error(error); showToast("Could not resume this game."); } });
   ui.resumeNewGame.addEventListener("click", () => { closeOverlay(ui.resumeDialog); state.resumeRecord = null; void startNewGame(); });
   ui.resumeClose.addEventListener("click", () => closeOverlay(ui.resumeDialog));
+  ui.promotionClose.addEventListener("click", () => closePromotionDialog());
+  ui.promotionOptions.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-piece]");
+    if (button) choosePromotion(button.dataset.piece);
+  });
+  ui.promotionDialog.addEventListener("click", (event) => {
+    if (event.target === ui.promotionDialog) closePromotionDialog();
+  });
   ui.replayClose.addEventListener("click", () => closeOverlay(ui.replayDialog));
   ui.replayFirst.addEventListener("click", () => { state.replay.index = 0; renderReplay(); });
   ui.replayPrev.addEventListener("click", () => { state.replay.index = Math.max(0, state.replay.index - 1); renderReplay(); });
@@ -1769,7 +1902,7 @@ function bindEvents() {
   ui.importFile.addEventListener("change", async () => { const file = ui.importFile.files?.[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) { showToast("Backup is larger than 5 MB."); return; } try { const backup = JSON.parse(await file.text()); const replace = window.confirm("Press OK to replace local data, or Cancel to merge this backup."); await importBackup(backup, replace ? "replace" : "merge"); showToast("Backup imported."); await refreshStorageSummary(); await refreshHistoryList(); } catch (error) { console.error(error); showToast(error.message || "Could not import backup."); } finally { ui.importFile.value = ""; } });
   ui.clearHistory.addEventListener("click", async () => { if (window.confirm("Clear all local game history?")) { await clearGames(); await refreshStorageSummary(); await refreshHistoryList(); showToast("Game history cleared."); } });
   ui.clearPositions.addEventListener("click", async () => { if (window.confirm("Clear all saved positions?")) { await clearSavedPositions(); await refreshStorageSummary(); await refreshPositionsList(); showToast("Saved positions cleared."); } });
-  ui.resetPreferences.addEventListener("click", async () => { if (window.confirm("Reset local preferences?")) { const preferences = await resetPreferences(); Object.assign(state, preferences); syncTheme(); syncEvalVisibility(); syncColorButtons(); syncSettingsUI(); await persistPreferences(); showToast("Preferences reset."); } });
+  ui.resetPreferences.addEventListener("click", async () => { if (window.confirm("Reset local preferences?")) { const previousAnimation = state.moveAnimation; const preferences = await resetPreferences(); Object.assign(state, preferences); syncTheme(); syncEvalVisibility(); syncColorButtons(); syncSettingsUI(); if (previousAnimation !== state.moveAnimation) rebuildBoard(); await persistPreferences(); showToast("Preferences reset."); } });
   ui.deleteAllData.addEventListener("click", async () => { if (window.prompt("Type DELETE to remove all local games, positions, and preferences.") === "DELETE") { await deleteAllData(); showToast("All local data deleted."); await refreshStorageSummary(); await refreshHistoryList(); } });
 
   ui.settingsClose.addEventListener("click", closeSettings);
@@ -1831,6 +1964,8 @@ function bindEvents() {
     }
     closeSettings();
     closeSetup();
+    closeOverlay(ui.aboutDialog);
+    closePromotionDialog();
     state.historyOpen = false;
     syncHistoryPanel();
   });
@@ -1840,6 +1975,7 @@ async function init() {
   try {
     Object.assign(state, await getPreferences());
     state.aiStrength = normalizeLevel(state.aiStrength);
+    state.moveAnimation = state.moveAnimation === "instant" ? "instant" : "slide";
     state.positionDepth = Number(state.positionDepth) || 12;
   } catch (error) {
     console.warn("Local preferences could not be loaded.", error);

@@ -19,7 +19,9 @@ test("validates a backup and discards malformed records", () => {
     preferences: { theme: "light" },
   });
   assert.equal(backup.games.length, 1);
+  assert.equal(backup.games[0].label, "Game");
   assert.equal(backup.savedPositions.length, 1);
   assert.equal(backup.preferences.theme, "light");
+  assert.equal(backup.preferences.moveAnimation, "slide");
   assert.throws(() => validateBackup({ format: "other", version: 1, games: [], savedPositions: [] }));
 });

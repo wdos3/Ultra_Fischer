@@ -94,6 +94,12 @@ a:focus-visible {
   text-decoration: none;
 }
 
+.brand-group {
+  align-items: center;
+  display: flex;
+  gap: 2px;
+}
+
 .brand-mark {
   align-items: center;
   background: var(--accent);
@@ -129,11 +135,6 @@ a:focus-visible {
   gap: 12px;
 }
 
-.header-note {
-  color: var(--faint);
-  font-size: 12px;
-}
-
 .icon-button,
 .micro-button,
 .compact-button,
@@ -153,6 +154,14 @@ a:focus-visible {
   height: 32px;
   min-width: 32px;
   padding: 0;
+}
+
+.about-button {
+  border-radius: 50%;
+  font-size: 15px;
+  font-weight: 600;
+  height: 26px;
+  min-width: 26px;
 }
 
 .icon-button:hover,
@@ -536,6 +545,56 @@ a:focus-visible {
   width: 100%;
 }
 
+.about-copy {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.about-copy p {
+  margin: 0 0 12px;
+}
+
+.about-copy p:last-child {
+  margin-bottom: 0;
+}
+
+.promotion-surface {
+  max-width: 520px;
+}
+
+.promotion-options {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.promotion-button {
+  align-items: center;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  justify-content: center;
+  min-height: 116px;
+  padding: 8px;
+}
+
+.promotion-button:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.promotion-button img {
+  height: 68px;
+  object-fit: contain;
+  width: 68px;
+}
+
 .overlay-head {
   border-bottom: 1px solid var(--border);
   justify-content: space-between;
@@ -590,6 +649,13 @@ a:focus-visible {
   color: var(--text);
   min-width: 70px;
   padding: 6px 8px;
+}
+
+.edit-record-button {
+  flex: 0 0 28px;
+  font-size: 16px;
+  height: 28px;
+  min-width: 28px;
 }
 
 .setting-toggle-row {
@@ -701,9 +767,6 @@ body.eval-hidden .board-row {
     grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
   }
 
-  .header-note {
-    display: none;
-  }
 }
 
 @media (max-width: 900px) {
@@ -884,7 +947,6 @@ body.eval-hidden .board-row {
     --board-size: min(82vw, calc(100dvh - 150px), 480px);
   }
 
-  .header-note,
   .player-strip {
     display: none;
   }
