@@ -58,7 +58,9 @@ function getConfig() {
 }
 
 function normalizeEmail(value) {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
+  return typeof value === "string"
+    ? value.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").trim().toLowerCase()
+    : "";
 }
 
 function isValidEmail(email) {
