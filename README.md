@@ -2,6 +2,8 @@
 
 Ultra Fischer is randomized chess with a local-first game archive. Positions are generated in the browser and evaluated by the bundled Stockfish workers.
 
+New positions use a configurable starting-balance limit (150 cp by default). Friendly Mode additionally requires several legal choices and multiple closely scored engine candidates, while a small two-position cache is prepared in the background and retained locally for faster later loads.
+
 ## Local data
 
 - Game records, unfinished and terminated games, favorite games, replays, and statistics use IndexedDB in a versioned `Ultra_Fischer` database.

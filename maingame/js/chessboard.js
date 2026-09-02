@@ -20,10 +20,15 @@ import {
   getStatistics,
   getStorageSummary,
   importBackup,
+  loadPositionPool,
   listFavoriteGames,
   listGames,
+  MAX_POSITION_BALANCE_CP,
+  MIN_POSITION_BALANCE_CP,
+  normalizePositionBalance,
   renameGame,
   resetPreferences,
+  savePositionPool,
   savePreferences,
   setGameFavorite,
   updateGame,
@@ -38,8 +43,12 @@ const LEGACY_LEVELS = {
 
 const EVALUATION_DEPTH = 16;
 const POSITION_GENERATION_TIMEOUT_MS = 15000;
-const POSITION_ACCEPTANCE_CP = 150;
 const POSITION_SCREEN_LIMIT_CP = 350;
+const POSITION_FRIENDLY_MIN_LEGAL_MOVES = 3;
+const POSITION_FRIENDLY_MIN_ENGINE_MOVES = 2;
+const POSITION_FRIENDLY_ENGINE_MOVE_MARGIN_CP = 125;
+const POSITION_FRIENDLY_CANDIDATE_COUNT = 4;
+const POSITION_POOL_LIMIT = 2;
 const POSITION_SCREEN_PROFILE = Object.freeze({
   ...ANALYSIS_PROFILE,
   depth: 10,
@@ -112,7 +121,9 @@ const ui = {
   opponentLabel: document.getElementById("opponent-label"),
   recordColor: document.getElementById("record-color"),
   recordTurn: document.getElementById("record-turn"),
+  positionBalance: document.getElementById("position-balance"),
   positionDepth: document.getElementById("position-depth"),
+  friendlyModeToggle: document.getElementById("friendly-mode-toggle"),
   promotionDetail: document.getElementById("promotion-detail"),
   promotionDialog: document.getElementById("promotion-dialog"),
   promotionOptions: document.getElementById("promotion-options"),
@@ -156,6 +167,11 @@ const state = {
   theme: "dark",
   toastTimer: null,
   opponentEngine: null,
+  positionEngine: null,
+  positionPool: [],
+  positionPrefetchPromise: null,
+  positionPrefetchTimer: null,
+  positionGenerationToken: 0,
   currentGameId: null,
   currentGameFavorite: false,
   currentGameLabel: null,
@@ -170,6 +186,8 @@ const state = {
   boardInteractionBound: false,
   resizeBound: false,
   promotionRequest: null,
+  friendlyMode: true,
+  positionBalanceCp: MIN_POSITION_BALANCE_CP,
 };
 
 class StockfishEngine {
@@ -313,6 +331,7 @@ class StockfishEngine {
       const resolve = this.currentTask.resolve;
       const payload = {
         bestMove: selectedMove,
+        candidates: Array.from(this.currentTask.candidates.values()),
         score: this.currentTask.score,
         config: this.currentTask.config,
       };
@@ -552,11 +571,15 @@ function loadRecordIntoGame(record) {
 
 async function persistPreferences() {
   try {
-    await savePreferences({ aiStrength: state.aiStrength, evalVisible: state.evalVisible, evalVisibilityConfigured: state.evalVisibilityConfigured, moveAnimation: state.moveAnimation, positionDepth: state.positionDepth, requestedColor: state.requestedColor, settingsOpen: state.settingsOpen, theme: state.theme });
+    await savePreferences({ aiStrength: state.aiStrength, evalVisible: state.evalVisible, evalVisibilityConfigured: state.evalVisibilityConfigured, friendlyMode: state.friendlyMode, moveAnimation: state.moveAnimation, positionBalanceCp: state.positionBalanceCp, positionDepth: state.positionDepth, requestedColor: state.requestedColor, settingsOpen: state.settingsOpen, theme: state.theme });
   } catch (error) {
     console.error(error);
     showToast("Preferences could not be saved.");
   }
+}
+
+function persistPositionPool() {
+  void savePositionPool(state.positionPool.slice(0, POSITION_POOL_LIMIT));
 }
 
 function setCurrentRecord(record) {
@@ -606,9 +629,14 @@ function syncColorButtons() {
 
 function syncSettingsUI() {
   const level = getLevelConfig(state.aiStrength);
+  ui.positionBalance.min = String(MIN_POSITION_BALANCE_CP);
+  ui.positionBalance.max = String(MAX_POSITION_BALANCE_CP);
+  ui.positionBalance.value = String(state.positionBalanceCp);
   ui.positionDepth.value = String(state.positionDepth);
   ui.moveAnimation.value = state.moveAnimation;
   ui.aiStrength.value = state.aiStrength;
+  ui.friendlyModeToggle.textContent = state.friendlyMode ? "On" : "Off";
+  ui.friendlyModeToggle.setAttribute("aria-pressed", String(state.friendlyMode));
   ui.setupLevelLabel.textContent = `Level ${state.aiStrength} · ${level.moveTime} ms`;
   ui.opponentLabel.textContent = state.playerVsPlayer
     ? "Local opponent"
@@ -1425,12 +1453,38 @@ function generatePosition(sideToMove) {
   return fen;
 }
 
-async function generateBalancedPosition(sideToMove, token) {
+function getPositionSettingsKey() {
+  return `${state.positionBalanceCp}:${state.friendlyMode}:${state.positionDepth}`;
+}
+
+function hasFriendlyMoveOptions(probe, result) {
+  if (probe.moves({ verbose: true }).length < POSITION_FRIENDLY_MIN_LEGAL_MOVES) {
+    return false;
+  }
+
+  const scores = (result.candidates || [])
+    .filter((candidate) => candidate.score?.type === "cp")
+    .map((candidate) => candidate.score.value);
+  if (scores.length < POSITION_FRIENDLY_MIN_ENGINE_MOVES) {
+    return false;
+  }
+
+  const bestScore = Math.max(...scores);
+  return scores.filter((score) => Math.abs(bestScore - score) <= POSITION_FRIENDLY_ENGINE_MOVE_MARGIN_CP).length >= POSITION_FRIENDLY_MIN_ENGINE_MOVES;
+}
+
+async function generateBalancedPosition(sideToMove, token, options = {}) {
+  const engine = options.engine || state.analysisEngine;
+  const acceptanceCp = normalizePositionBalance(options.acceptanceCp ?? state.positionBalanceCp);
+  const friendlyMode = options.friendlyMode ?? state.friendlyMode;
+  const settingsKey = options.settingsKey || getPositionSettingsKey();
+  const announce = options.announce !== false;
+  const isCancelled = options.isCancelled || (() => token !== state.taskToken || settingsKey !== getPositionSettingsKey());
   const deadline = performance.now() + POSITION_GENERATION_TIMEOUT_MS;
   let attempt = 0;
 
   while (performance.now() < deadline) {
-    if (token !== state.taskToken) {
+    if (isCancelled()) {
       return null;
     }
 
@@ -1440,7 +1494,9 @@ async function generateBalancedPosition(sideToMove, token) {
     }
 
     attempt += 1;
-    setStatus(`Finding a balanced position... attempt ${attempt}`);
+    if (announce) {
+      setStatus(`Finding a balanced position... attempt ${attempt}`);
+    }
     const fen = generatePosition(sideToMove);
     const probe = new Chess();
     if (!probe.load(fen)) {
@@ -1449,14 +1505,15 @@ async function generateBalancedPosition(sideToMove, token) {
 
     const screenProfile = {
       ...POSITION_SCREEN_PROFILE,
+      candidateCount: friendlyMode ? POSITION_FRIENDLY_CANDIDATE_COUNT : POSITION_SCREEN_PROFILE.candidateCount,
       depth: clamp(Number(state.positionDepth) || POSITION_SCREEN_PROFILE.depth, 8, 12),
       moveTime: Math.min(
         POSITION_SCREEN_PROFILE.moveTime,
         Math.max(120, Math.floor(remainingBeforeSearch - 80))
       ),
     };
-    const screenResult = await state.analysisEngine.search(fen, screenProfile);
-    if (token !== state.taskToken) {
+    const screenResult = await engine.search(fen, screenProfile);
+    if (isCancelled()) {
       return null;
     }
     if (!screenResult.score || screenResult.score.type !== "cp") {
@@ -1464,7 +1521,10 @@ async function generateBalancedPosition(sideToMove, token) {
     }
 
     const screenScore = normalizeScoreForWhite(screenResult.score, probe.turn());
-    if (Math.abs(screenScore.value) > POSITION_SCREEN_LIMIT_CP) {
+    if (Math.abs(screenScore.value) > Math.max(POSITION_SCREEN_LIMIT_CP, acceptanceCp * 1.5)) {
+      continue;
+    }
+    if (friendlyMode && !hasFriendlyMoveOptions(probe, screenResult)) {
       continue;
     }
 
@@ -1473,14 +1533,15 @@ async function generateBalancedPosition(sideToMove, token) {
       break;
     }
 
-    const confirmResult = await state.analysisEngine.search(fen, {
+    const confirmResult = await engine.search(fen, {
       ...POSITION_CONFIRM_PROFILE,
+      candidateCount: friendlyMode ? POSITION_FRIENDLY_CANDIDATE_COUNT : POSITION_CONFIRM_PROFILE.candidateCount,
       moveTime: Math.min(
         POSITION_CONFIRM_PROFILE.moveTime,
         Math.max(120, Math.floor(remainingBeforeConfirmation - 80))
       ),
     });
-    if (token !== state.taskToken) {
+    if (isCancelled()) {
       return null;
     }
 
@@ -1490,12 +1551,103 @@ async function generateBalancedPosition(sideToMove, token) {
 
     const normalized = normalizeScoreForWhite(confirmResult.score, probe.turn());
     const distance = Math.abs(normalized.value);
-    if (distance <= POSITION_ACCEPTANCE_CP) {
+    if (distance <= acceptanceCp && (!friendlyMode || hasFriendlyMoveOptions(probe, confirmResult))) {
       return { fen, score: normalized };
     }
   }
 
   return null;
+}
+
+function takeCachedPosition(sideToMove) {
+  const settingsKey = getPositionSettingsKey();
+  const index = state.positionPool.findIndex((candidate) => candidate.sideToMove === sideToMove && candidate.settingsKey === settingsKey);
+  if (index < 0) {
+    return null;
+  }
+  const [candidate] = state.positionPool.splice(index, 1);
+  persistPositionPool();
+  return candidate;
+}
+
+function invalidatePositionPool() {
+  state.positionGenerationToken += 1;
+  state.positionPool = [];
+  persistPositionPool();
+  state.positionEngine?.cancelPending();
+}
+
+async function ensurePositionEngine() {
+  if (!state.positionEngine) {
+    state.positionEngine = new StockfishEngine();
+  }
+  try {
+    await state.positionEngine.ready();
+  } catch (error) {
+    state.positionEngine = null;
+    throw error;
+  }
+  return state.positionEngine;
+}
+
+async function prefetchPosition(sideToMove, settingsKey, token) {
+  const engine = await ensurePositionEngine();
+  const candidate = await generateBalancedPosition(sideToMove, token, {
+    acceptanceCp: state.positionBalanceCp,
+    announce: false,
+    engine,
+    friendlyMode: state.friendlyMode,
+    isCancelled: () => token !== state.positionGenerationToken || settingsKey !== getPositionSettingsKey(),
+    settingsKey,
+  });
+  if (!candidate || token !== state.positionGenerationToken || settingsKey !== getPositionSettingsKey()) {
+    return;
+  }
+  if (!state.positionPool.some((item) => item.sideToMove === sideToMove && item.settingsKey === settingsKey)) {
+    state.positionPool.push({ ...candidate, settingsKey, sideToMove });
+    persistPositionPool();
+  }
+}
+
+function prefetchPositions() {
+  if (!state.engineReady || state.positionPrefetchPromise) {
+    return;
+  }
+
+  const settingsKey = getPositionSettingsKey();
+  const token = state.positionGenerationToken;
+  state.positionPool = state.positionPool.filter((candidate) => candidate.settingsKey === settingsKey);
+  state.positionPrefetchPromise = (async () => {
+    try {
+      for (const sideToMove of ["w", "b"]) {
+        if (state.positionPool.length >= POSITION_POOL_LIMIT || token !== state.positionGenerationToken || settingsKey !== getPositionSettingsKey()) {
+          break;
+        }
+        if (state.positionPool.some((candidate) => candidate.sideToMove === sideToMove && candidate.settingsKey === settingsKey)) {
+          continue;
+        }
+        await prefetchPosition(sideToMove, settingsKey, token);
+      }
+    } catch (error) {
+      console.warn("Background position generation failed.", error);
+    } finally {
+      state.positionPrefetchPromise = null;
+    }
+  })();
+}
+
+function schedulePositionPrefetch() {
+  if (state.positionPrefetchTimer) {
+    window.clearTimeout(state.positionPrefetchTimer);
+  }
+  state.positionPrefetchTimer = window.setTimeout(() => {
+    state.positionPrefetchTimer = null;
+    if (state.isBusy) {
+      schedulePositionPrefetch();
+      return;
+    }
+    prefetchPositions();
+  }, 1200);
 }
 
 async function startNewGame() {
@@ -1522,7 +1674,13 @@ async function startNewGame() {
 
   state.actualPlayerColor = actualColor;
   state.board.orientation(actualColor === "w" ? "white" : "black");
-  setStatus(state.pendingStartFen ? "Loading favorite game..." : "Preparing a randomized position...");
+  const cachedCandidate = state.pendingStartFen ? null : takeCachedPosition(actualColor);
+  setStatus(state.pendingStartFen
+    ? "Loading favorite game..."
+    : cachedCandidate
+      ? "Loading a ready position..."
+      : "Preparing a randomized position...");
+  let gameStarted = false;
 
   try {
     await terminateCurrentGame();
@@ -1531,7 +1689,7 @@ async function startNewGame() {
     }
     const candidate = state.pendingStartFen
       ? { fen: state.pendingStartFen, score: null }
-      : await generateBalancedPosition(actualColor, token);
+      : cachedCandidate || await generateBalancedPosition(actualColor, token);
     if (!candidate || token !== state.taskToken) {
       if (token === state.taskToken) {
         setStatus("Could not find a balanced position within 15 seconds. Try again.");
@@ -1549,6 +1707,7 @@ async function startNewGame() {
     updateSideLabels();
     updateEvalBar(candidate.score);
     setStatus(describeResult());
+    gameStarted = true;
     const evaluationToken = state.taskToken;
     window.setTimeout(() => {
       if (evaluationToken === state.taskToken && !state.isBusy) {
@@ -1558,6 +1717,9 @@ async function startNewGame() {
   } finally {
     if (token === state.taskToken) {
       setBusy(false);
+      if (gameStarted) {
+        schedulePositionPrefetch();
+      }
     }
   }
 }
@@ -2089,7 +2251,7 @@ function bindEvents() {
   ui.importFile.addEventListener("change", async () => { const file = ui.importFile.files?.[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) { showToast("Backup is larger than 5 MB."); return; } try { const backup = JSON.parse(await file.text()); const replace = window.confirm("Press OK to replace local data, or Cancel to merge this backup."); await importBackup(backup, replace ? "replace" : "merge"); showToast("Backup imported."); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); } catch (error) { console.error(error); showToast(error.message || "Could not import backup."); } finally { ui.importFile.value = ""; } });
   ui.clearHistory.addEventListener("click", async () => { if (window.confirm("Clear all local game history?")) { await clearGames(); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); showToast("Game history cleared."); } });
   ui.clearFavorites.addEventListener("click", async () => { if (window.confirm("Remove all games from Favorite Games?")) { await clearGameFavorites(); await refreshStorageSummary(); await refreshFavoritesList(); await refreshHistoryList(); showToast("Favorite games cleared."); } });
-  ui.resetPreferences.addEventListener("click", async () => { if (window.confirm("Reset local preferences?")) { const previousAnimation = state.moveAnimation; const preferences = await resetPreferences(); Object.assign(state, preferences); syncTheme(); syncEvalVisibility(); syncColorButtons(); syncSettingsUI(); if (previousAnimation !== state.moveAnimation) rebuildBoard(); await persistPreferences(); showToast("Preferences reset."); } });
+  ui.resetPreferences.addEventListener("click", async () => { if (window.confirm("Reset local preferences?")) { const previousAnimation = state.moveAnimation; const preferences = await resetPreferences(); invalidatePositionPool(); Object.assign(state, preferences); syncTheme(); syncEvalVisibility(); syncColorButtons(); syncSettingsUI(); if (previousAnimation !== state.moveAnimation) rebuildBoard(); await persistPreferences(); showToast("Preferences reset."); } });
   ui.deleteAllData.addEventListener("click", async () => { if (window.prompt("Type DELETE to remove all local games, favorite games, and preferences.") === "DELETE") { await deleteAllData(); showToast("All local data deleted."); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); } });
 
   ui.settingsClose.addEventListener("click", closeSettings);
@@ -2136,6 +2298,24 @@ function bindEvents() {
 
   ui.positionDepth.addEventListener("change", () => {
     state.positionDepth = Number(ui.positionDepth.value);
+    invalidatePositionPool();
+    void persistPreferences();
+    syncSettingsUI();
+  });
+
+  ui.positionBalance.addEventListener("change", () => {
+    const nextBalance = normalizePositionBalance(ui.positionBalance.value);
+    if (nextBalance !== state.positionBalanceCp) {
+      invalidatePositionPool();
+    }
+    state.positionBalanceCp = nextBalance;
+    void persistPreferences();
+    syncSettingsUI();
+  });
+
+  ui.friendlyModeToggle.addEventListener("click", () => {
+    state.friendlyMode = !state.friendlyMode;
+    invalidatePositionPool();
     void persistPreferences();
     syncSettingsUI();
   });
@@ -2168,7 +2348,10 @@ async function init() {
     }
     state.aiStrength = normalizeLevel(state.aiStrength);
     state.moveAnimation = state.moveAnimation === "instant" ? "instant" : "slide";
+    state.positionBalanceCp = normalizePositionBalance(state.positionBalanceCp);
     state.positionDepth = Number(state.positionDepth) || 12;
+    state.friendlyMode = state.friendlyMode !== false;
+    state.positionPool = (await loadPositionPool()).filter((candidate) => candidate.settingsKey === getPositionSettingsKey());
   } catch (error) {
     console.warn("Local preferences could not be loaded.", error);
   }

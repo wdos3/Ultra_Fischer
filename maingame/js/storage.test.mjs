@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isValidFen, normalizeFen, validateBackup } from "./storage.mjs";
+import {
+  isValidFen,
+  MAX_POSITION_BALANCE_CP,
+  MIN_POSITION_BALANCE_CP,
+  normalizeFen,
+  normalizePositionBalance,
+  validateBackup,
+} from "./storage.mjs";
 
 const startingFen = "7k/8/8/8/8/8/8/K7 w - - 0 1";
 
@@ -8,6 +15,13 @@ test("validates and normalizes FEN values", () => {
   assert.equal(isValidFen(startingFen), true);
   assert.equal(isValidFen("not a fen"), false);
   assert.equal(normalizeFen("  7k/8/8/8/8/8/8/K7   w - - 0 1 "), startingFen);
+});
+
+test("keeps the starting balance setting within the supported range", () => {
+  assert.equal(normalizePositionBalance(100), MIN_POSITION_BALANCE_CP);
+  assert.equal(normalizePositionBalance(375), 375);
+  assert.equal(normalizePositionBalance("not a number"), MIN_POSITION_BALANCE_CP);
+  assert.equal(normalizePositionBalance(MAX_POSITION_BALANCE_CP + 1), MAX_POSITION_BALANCE_CP);
 });
 
 test("validates a backup and discards malformed records", () => {
@@ -23,6 +37,8 @@ test("validates a backup and discards malformed records", () => {
   assert.equal(backup.savedPositions.length, 1);
   assert.equal(backup.preferences.theme, "light");
   assert.equal(backup.preferences.moveAnimation, "slide");
+  assert.equal(backup.preferences.positionBalanceCp, MIN_POSITION_BALANCE_CP);
+  assert.equal(backup.preferences.friendlyMode, true);
   assert.throws(() => validateBackup({ format: "other", version: 1, games: [], savedPositions: [] }));
 });
 

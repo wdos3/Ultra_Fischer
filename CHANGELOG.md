@@ -2,6 +2,14 @@
 
 All notable Ultra Fischer changes currently present in this repository are recorded here. Entries are reconstructed from the Git history and include the commit that introduced each change.
 
+## 2026-09-02
+
+### Position generation and evaluation
+
+- Add a persisted starting-balance setting with a 150 cp minimum and a bounded 2000 cp maximum, plus Friendly Mode for rejecting positions with too few legal choices or too few closely scored engine alternatives.
+- Add a small two-position local cache backed by a separate Stockfish worker so ready positions can be prepared in the background and reused after a page reload without storing thousands of seeds or competing with the live game engine.
+- Make the evaluation bar's white fill span the full track in both orientations and keep the selected balance limit accurate in the About copy.
+
 ## 2026-08-18
 
 ### Board, promotion, and evaluation

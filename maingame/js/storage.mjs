@@ -2,16 +2,21 @@ const DB_NAME = "Ultra_Fischer";
 const LEGACY_DB_NAME = "ultra-fischer";
 const DB_VERSION = 2;
 const PREFERENCES_KEY = "Ultra_Fischer.preferences";
+const POSITION_POOL_KEY = "Ultra_Fischer.position-pool";
 const LEGACY_PREFERENCES_KEY = "ultraFischer.preferences";
 const BACKUP_FORMAT = "Ultra_Fischer-backup";
 const LEGACY_BACKUP_FORMAT = "ultra-fischer-backup";
 const BACKUP_VERSION = 1;
+const MIN_POSITION_BALANCE_CP = 150;
+const MAX_POSITION_BALANCE_CP = 2000;
 
 const DEFAULT_PREFERENCES = Object.freeze({
   aiStrength: "4",
   evalVisible: false,
   evalVisibilityConfigured: false,
+  friendlyMode: true,
   moveAnimation: "slide",
+  positionBalanceCp: MIN_POSITION_BALANCE_CP,
   positionDepth: 12,
   requestedColor: "w",
   settingsOpen: false,
@@ -51,6 +56,30 @@ function normalizeFen(fen) {
 
 function normalizeMoveAnimation(value) {
   return value === "instant" ? "instant" : "slide";
+}
+
+function normalizePositionBalance(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return MIN_POSITION_BALANCE_CP;
+  }
+  return Math.round(Math.min(MAX_POSITION_BALANCE_CP, Math.max(MIN_POSITION_BALANCE_CP, numeric)));
+}
+
+function normalizePreferences(preferences = {}) {
+  const source = { ...DEFAULT_PREFERENCES, ...preferences };
+  return {
+    aiStrength: /^[1-8]$/.test(String(source.aiStrength)) ? String(source.aiStrength) : DEFAULT_PREFERENCES.aiStrength,
+    evalVisible: Boolean(source.evalVisible),
+    evalVisibilityConfigured: Boolean(source.evalVisibilityConfigured),
+    friendlyMode: source.friendlyMode === true || source.friendlyMode === "true",
+    moveAnimation: normalizeMoveAnimation(source.moveAnimation),
+    positionBalanceCp: normalizePositionBalance(source.positionBalanceCp),
+    positionDepth: [6, 8, 10, 12].includes(Number(source.positionDepth)) ? Number(source.positionDepth) : DEFAULT_PREFERENCES.positionDepth,
+    requestedColor: ["w", "b", "random"].includes(source.requestedColor) ? source.requestedColor : DEFAULT_PREFERENCES.requestedColor,
+    settingsOpen: Boolean(source.settingsOpen),
+    theme: source.theme === "light" ? "light" : "dark",
+  };
 }
 
 export function isValidFen(fen) {
@@ -183,11 +212,10 @@ function readPreferences() {
     const raw = currentRaw || legacyRaw;
     if (raw) {
       const storedPreferences = JSON.parse(raw);
-      const preferences = { ...DEFAULT_PREFERENCES, ...storedPreferences };
+      const preferences = normalizePreferences(storedPreferences);
       if (!Object.prototype.hasOwnProperty.call(storedPreferences, "evalVisibilityConfigured")) {
         preferences.evalVisible = false;
       }
-      preferences.moveAnimation = normalizeMoveAnimation(preferences.moveAnimation);
       if (!currentRaw) {
         localStorage.setItem(PREFERENCES_KEY, JSON.stringify(preferences));
       }
@@ -201,7 +229,7 @@ function readPreferences() {
       settingsOpen: localStorage.getItem("ultra-fischer-settings-open"),
       theme: localStorage.getItem("ultra-fischer-theme"),
     };
-    const migrated = {
+    const migrated = normalizePreferences({
       ...DEFAULT_PREFERENCES,
       ...(legacy.aiStrength ? { aiStrength: legacy.aiStrength } : {}),
       ...(legacy.moveAnimation ? { moveAnimation: normalizeMoveAnimation(legacy.moveAnimation) } : {}),
@@ -209,12 +237,12 @@ function readPreferences() {
       ...(legacy.requestedColor ? { requestedColor: legacy.requestedColor } : {}),
       ...(legacy.settingsOpen ? { settingsOpen: legacy.settingsOpen === "true" } : {}),
       ...(legacy.theme ? { theme: legacy.theme } : {}),
-    };
+    });
     localStorage.setItem(PREFERENCES_KEY, JSON.stringify(migrated));
     return migrated;
   } catch (error) {
     console.warn("Local preferences are unavailable.", error);
-    return { ...DEFAULT_PREFERENCES };
+    return normalizePreferences(DEFAULT_PREFERENCES);
   }
 }
 
@@ -223,8 +251,7 @@ export function getPreferences() {
 }
 
 export function savePreferences(preferences) {
-  const next = { ...DEFAULT_PREFERENCES, ...preferences };
-  next.moveAnimation = normalizeMoveAnimation(next.moveAnimation);
+  const next = normalizePreferences(preferences);
   try {
     localStorage.setItem(PREFERENCES_KEY, JSON.stringify(next));
   } catch (error) {
@@ -237,13 +264,47 @@ export function resetPreferences() {
   try {
     localStorage.removeItem(PREFERENCES_KEY);
     localStorage.removeItem(LEGACY_PREFERENCES_KEY);
-    for (const key of ["ultra-fischer-ai-strength", "ultra-fischer-eval-visible", "ultra-fischer-move-animation", "ultra-fischer-position-depth", "ultra-fischer-requested-color", "ultra-fischer-settings-open", "ultra-fischer-theme"]) {
+    localStorage.removeItem(POSITION_POOL_KEY);
+    for (const key of ["ultra-fischer-ai-strength", "ultra-fischer-eval-visible", "ultra-fischer-move-animation", "ultra-fischer-position-balance", "ultra-fischer-position-depth", "ultra-fischer-requested-color", "ultra-fischer-settings-open", "ultra-fischer-theme"]) {
       localStorage.removeItem(key);
     }
   } catch (error) {
     throw new Error("Preferences could not be reset.", { cause: error });
   }
   return Promise.resolve({ ...DEFAULT_PREFERENCES });
+}
+
+function cleanPositionPoolCandidate(candidate) {
+  if (!candidate || !["w", "b"].includes(candidate.sideToMove) || typeof candidate.settingsKey !== "string" || !isValidFen(candidate.fen)) {
+    return null;
+  }
+  const score = candidate.score && ["cp", "mate"].includes(candidate.score.type) && Number.isFinite(Number(candidate.score.value))
+    ? { type: candidate.score.type, value: Number(candidate.score.value), depth: Number(candidate.score.depth) || 0 }
+    : null;
+  return { fen: normalizeFen(candidate.fen), score, settingsKey: candidate.settingsKey, sideToMove: candidate.sideToMove };
+}
+
+export function loadPositionPool() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(POSITION_POOL_KEY) || "[]");
+    return Promise.resolve(Array.isArray(stored) ? stored.map(cleanPositionPoolCandidate).filter(Boolean) : []);
+  } catch (error) {
+    console.warn("Saved position cache is unavailable.", error);
+    return Promise.resolve([]);
+  }
+}
+
+export function savePositionPool(candidates) {
+  const cleanCandidates = (Array.isArray(candidates) ? candidates : [])
+    .map(cleanPositionPoolCandidate)
+    .filter(Boolean)
+    .slice(0, 2);
+  try {
+    localStorage.setItem(POSITION_POOL_KEY, JSON.stringify(cleanCandidates));
+  } catch (error) {
+    console.warn("Saved position cache could not be updated.", error);
+  }
+  return Promise.resolve(cleanCandidates);
 }
 
 function cleanGame(record) {
@@ -436,8 +497,7 @@ export function validateBackup(backup) {
       return null;
     }
   }).filter(Boolean);
-  const preferences = { ...DEFAULT_PREFERENCES, ...(backup.preferences || {}) };
-  preferences.moveAnimation = normalizeMoveAnimation(preferences.moveAnimation);
+  const preferences = normalizePreferences(backup.preferences || {});
   return { games, favoriteGames, savedPositions, preferences };
 }
 
@@ -471,7 +531,16 @@ export async function importBackup(backup, mode = "merge") {
 }
 
 export async function deleteAllData() {
-  await Promise.all([clearGames(), clearSavedPositions(), resetPreferences()]);
+  await Promise.all([clearGames(), clearSavedPositions(), resetPreferences(), savePositionPool([])]);
 }
 
-export { DB_NAME, DB_VERSION, PREFERENCES_KEY, makeId, normalizeFen };
+export {
+  DB_NAME,
+  DB_VERSION,
+  MAX_POSITION_BALANCE_CP,
+  MIN_POSITION_BALANCE_CP,
+  PREFERENCES_KEY,
+  makeId,
+  normalizeFen,
+  normalizePositionBalance,
+};
