@@ -9,6 +9,7 @@ const LEGACY_BACKUP_FORMAT = "ultra-fischer-backup";
 const BACKUP_VERSION = 1;
 const MIN_POSITION_BALANCE_CP = 150;
 const MAX_POSITION_BALANCE_CP = 2000;
+const SUPPORTED_THEMES = ["dark", "light", "slate", "forest", "blue"];
 
 const DEFAULT_PREFERENCES = Object.freeze({
   aiStrength: "4",
@@ -17,7 +18,6 @@ const DEFAULT_PREFERENCES = Object.freeze({
   friendlyMode: true,
   moveAnimation: "slide",
   positionBalanceCp: MIN_POSITION_BALANCE_CP,
-  positionDepth: 12,
   requestedColor: "w",
   settingsOpen: false,
   theme: "dark",
@@ -75,10 +75,9 @@ function normalizePreferences(preferences = {}) {
     friendlyMode: source.friendlyMode === true || source.friendlyMode === "true",
     moveAnimation: normalizeMoveAnimation(source.moveAnimation),
     positionBalanceCp: normalizePositionBalance(source.positionBalanceCp),
-    positionDepth: [6, 8, 10, 12].includes(Number(source.positionDepth)) ? Number(source.positionDepth) : DEFAULT_PREFERENCES.positionDepth,
     requestedColor: ["w", "b", "random"].includes(source.requestedColor) ? source.requestedColor : DEFAULT_PREFERENCES.requestedColor,
     settingsOpen: Boolean(source.settingsOpen),
-    theme: source.theme === "light" ? "light" : "dark",
+    theme: SUPPORTED_THEMES.includes(source.theme) ? source.theme : DEFAULT_PREFERENCES.theme,
   };
 }
 
@@ -224,7 +223,6 @@ function readPreferences() {
     const legacy = {
       aiStrength: localStorage.getItem("ultra-fischer-ai-strength"),
       moveAnimation: localStorage.getItem("ultra-fischer-move-animation"),
-      positionDepth: localStorage.getItem("ultra-fischer-position-depth"),
       requestedColor: localStorage.getItem("ultra-fischer-requested-color"),
       settingsOpen: localStorage.getItem("ultra-fischer-settings-open"),
       theme: localStorage.getItem("ultra-fischer-theme"),
@@ -233,7 +231,6 @@ function readPreferences() {
       ...DEFAULT_PREFERENCES,
       ...(legacy.aiStrength ? { aiStrength: legacy.aiStrength } : {}),
       ...(legacy.moveAnimation ? { moveAnimation: normalizeMoveAnimation(legacy.moveAnimation) } : {}),
-      ...(legacy.positionDepth ? { positionDepth: Number(legacy.positionDepth) } : {}),
       ...(legacy.requestedColor ? { requestedColor: legacy.requestedColor } : {}),
       ...(legacy.settingsOpen ? { settingsOpen: legacy.settingsOpen === "true" } : {}),
       ...(legacy.theme ? { theme: legacy.theme } : {}),

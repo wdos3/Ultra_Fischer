@@ -42,6 +42,7 @@ const LEGACY_LEVELS = {
 };
 
 const EVALUATION_DEPTH = 16;
+const POSITION_GENERATION_DEPTH = 12;
 const POSITION_GENERATION_TIMEOUT_MS = 15000;
 const POSITION_SCREEN_LIMIT_CP = 350;
 const POSITION_FRIENDLY_MIN_LEGAL_MOVES = 3;
@@ -51,7 +52,7 @@ const POSITION_FRIENDLY_CANDIDATE_COUNT = 4;
 const POSITION_POOL_LIMIT = 2;
 const POSITION_SCREEN_PROFILE = Object.freeze({
   ...ANALYSIS_PROFILE,
-  depth: 10,
+  depth: POSITION_GENERATION_DEPTH,
   moveTime: 300,
 });
 const POSITION_CONFIRM_PROFILE = Object.freeze({
@@ -122,8 +123,11 @@ const ui = {
   recordColor: document.getElementById("record-color"),
   recordTurn: document.getElementById("record-turn"),
   positionBalance: document.getElementById("position-balance"),
-  positionDepth: document.getElementById("position-depth"),
   friendlyModeToggle: document.getElementById("friendly-mode-toggle"),
+  settingInfoDialog: document.getElementById("setting-info-dialog"),
+  settingInfoTitle: document.getElementById("setting-info-title"),
+  settingInfoBody: document.getElementById("setting-info-body"),
+  settingInfoClose: document.getElementById("setting-info-close"),
   promotionDetail: document.getElementById("promotion-detail"),
   promotionDialog: document.getElementById("promotion-dialog"),
   promotionOptions: document.getElementById("promotion-options"),
@@ -133,7 +137,7 @@ const ui = {
   settingsToggle: document.getElementById("settings-toggle"),
   sharePosition: document.getElementById("share-position"),
   statusText: document.getElementById("status-text"),
-  themeToggle: document.getElementById("theme-toggle"),
+  themeSelect: document.getElementById("theme-select"),
   toast: document.getElementById("toast"),
   toggleMode: document.getElementById("toggle-mode"),
   undo: document.getElementById("undo"),
@@ -159,7 +163,6 @@ const state = {
   matchOver: false,
   historyOpen: false,
   playerVsPlayer: false,
-  positionDepth: 12,
   requestedColor: "w",
   setupOpen: false,
   settingsOpen: false,
@@ -555,6 +558,59 @@ function openAppMenu() {
   ui.settingsToggle.setAttribute("aria-expanded", "true");
 }
 
+function returnToAppMenu() {
+  [ui.historyDialog, ui.favoritesDialog, ui.statisticsDialog, ui.dataDialog, ui.settingsCard].forEach(closeOverlay);
+  state.settingsOpen = false;
+  void persistPreferences();
+  openAppMenu();
+}
+
+function openSettingInfo(topic) {
+  const details = {
+    stockfish: {
+      title: "Stockfish levels",
+      paragraphs: ["Higher levels spend more time searching and look deeper before choosing a move. The level changes the opponent engine only; the evaluation display uses its own higher-accuracy analysis profile."],
+      rows: [
+        ["1–3", "Fast play", "Shallow search and short thinking time"],
+        ["4–5", "Standard", "Balanced speed and strength"],
+        ["6–7", "Strong", "Deeper search and longer thinking time"],
+        ["8", "Maximum", "Deepest search and longest thinking time"],
+      ],
+    },
+    friendly: {
+      title: "Friendly mode",
+      paragraphs: [
+        "Friendly mode screens generated starting positions for practical play. It requires several legal moves and at least two closely scored engine choices, so the opening is less likely to be an immediate one-move trap.",
+        "When Friendly mode is off, the position still respects the starting balance limit, but forced or tactical positions are allowed to appear.",
+      ],
+      rows: [],
+    },
+  }[topic];
+  if (!details) return;
+  ui.settingInfoTitle.textContent = details.title;
+  ui.settingInfoBody.replaceChildren();
+  details.paragraphs.forEach((paragraph) => {
+    const element = document.createElement("p");
+    element.textContent = paragraph;
+    ui.settingInfoBody.appendChild(element);
+  });
+  if (details.rows.length) {
+    const table = document.createElement("div");
+    table.className = "info-table";
+    details.rows.forEach(([level, label, description]) => {
+      const levelCell = document.createElement("strong");
+      levelCell.textContent = level;
+      const labelCell = document.createElement("strong");
+      labelCell.textContent = label;
+      const descriptionCell = document.createElement("span");
+      descriptionCell.textContent = description;
+      table.append(levelCell, labelCell, descriptionCell);
+    });
+    ui.settingInfoBody.appendChild(table);
+  }
+  openOverlay(ui.settingInfoDialog);
+}
+
 function loadRecordIntoGame(record) {
   if (!game.load(record.startingFen)) {
     throw new Error("This saved game has an invalid starting position.");
@@ -571,7 +627,7 @@ function loadRecordIntoGame(record) {
 
 async function persistPreferences() {
   try {
-    await savePreferences({ aiStrength: state.aiStrength, evalVisible: state.evalVisible, evalVisibilityConfigured: state.evalVisibilityConfigured, friendlyMode: state.friendlyMode, moveAnimation: state.moveAnimation, positionBalanceCp: state.positionBalanceCp, positionDepth: state.positionDepth, requestedColor: state.requestedColor, settingsOpen: state.settingsOpen, theme: state.theme });
+    await savePreferences({ aiStrength: state.aiStrength, evalVisible: state.evalVisible, evalVisibilityConfigured: state.evalVisibilityConfigured, friendlyMode: state.friendlyMode, moveAnimation: state.moveAnimation, positionBalanceCp: state.positionBalanceCp, requestedColor: state.requestedColor, settingsOpen: state.settingsOpen, theme: state.theme });
   } catch (error) {
     console.error(error);
     showToast("Preferences could not be saved.");
@@ -606,7 +662,7 @@ function setCurrentRecord(record) {
 
 function syncTheme() {
   document.body.dataset.theme = state.theme;
-  ui.themeToggle.textContent = state.theme === "dark" ? "Light" : "Dark";
+  ui.themeSelect.value = state.theme;
   if (state.board) {
     state.board.resize();
   }
@@ -632,9 +688,9 @@ function syncSettingsUI() {
   ui.positionBalance.min = String(MIN_POSITION_BALANCE_CP);
   ui.positionBalance.max = String(MAX_POSITION_BALANCE_CP);
   ui.positionBalance.value = String(state.positionBalanceCp);
-  ui.positionDepth.value = String(state.positionDepth);
   ui.moveAnimation.value = state.moveAnimation;
   ui.aiStrength.value = state.aiStrength;
+  ui.themeSelect.value = state.theme;
   ui.friendlyModeToggle.textContent = state.friendlyMode ? "On" : "Off";
   ui.friendlyModeToggle.setAttribute("aria-pressed", String(state.friendlyMode));
   ui.setupLevelLabel.textContent = `Level ${state.aiStrength} · ${level.moveTime} ms`;
@@ -858,6 +914,10 @@ async function openPanel(panel) {
   if (panel === "favorites") await refreshFavoritesList();
   if (panel === "statistics") await refreshStatistics();
   if (panel === "data") await refreshStorageSummary();
+  if (panel === "settings") {
+    state.settingsOpen = true;
+    syncSettingsPanel();
+  }
 }
 
 function closePanel(element) {
@@ -1454,7 +1514,7 @@ function generatePosition(sideToMove) {
 }
 
 function getPositionSettingsKey() {
-  return `${state.positionBalanceCp}:${state.friendlyMode}:${state.positionDepth}`;
+  return `${state.positionBalanceCp}:${state.friendlyMode}`;
 }
 
 function hasFriendlyMoveOptions(probe, result) {
@@ -1506,7 +1566,6 @@ async function generateBalancedPosition(sideToMove, token, options = {}) {
     const screenProfile = {
       ...POSITION_SCREEN_PROFILE,
       candidateCount: friendlyMode ? POSITION_FRIENDLY_CANDIDATE_COUNT : POSITION_SCREEN_PROFILE.candidateCount,
-      depth: clamp(Number(state.positionDepth) || POSITION_SCREEN_PROFILE.depth, 8, 12),
       moveTime: Math.min(
         POSITION_SCREEN_PROFILE.moveTime,
         Math.max(120, Math.floor(remainingBeforeSearch - 80))
@@ -2102,8 +2161,8 @@ function bindEvents() {
     await refreshEvaluation();
   });
 
-  ui.themeToggle.addEventListener("click", () => {
-    state.theme = state.theme === "dark" ? "light" : "dark";
+  ui.themeSelect.addEventListener("change", () => {
+    state.theme = ui.themeSelect.value;
     void persistPreferences();
     syncTheme();
   });
@@ -2130,8 +2189,18 @@ function bindEvents() {
     const button = event.target.closest("[data-panel]");
     if (button) void openPanel(button.dataset.panel);
   });
+  document.querySelectorAll("[data-back-menu]").forEach((button) => {
+    button.addEventListener("click", returnToAppMenu);
+  });
   document.querySelectorAll("[data-close-panel]").forEach((button) => {
-    button.addEventListener("click", () => closeOverlay(document.getElementById(button.dataset.closePanel)));
+    button.addEventListener("click", () => closePanel(document.getElementById(button.dataset.closePanel)));
+  });
+  document.querySelectorAll("[data-setting-info]").forEach((button) => {
+    button.addEventListener("click", () => openSettingInfo(button.dataset.settingInfo));
+  });
+  ui.settingInfoClose.addEventListener("click", () => closeOverlay(ui.settingInfoDialog));
+  ui.settingInfoDialog.addEventListener("click", (event) => {
+    if (event.target === ui.settingInfoDialog) closeOverlay(ui.settingInfoDialog);
   });
   [ui.historyFilter, ui.historySort].forEach((control) => control.addEventListener("change", () => void refreshHistoryList()));
   ui.historyList.addEventListener("click", async (event) => {
@@ -2296,13 +2365,6 @@ function bindEvents() {
     });
   });
 
-  ui.positionDepth.addEventListener("change", () => {
-    state.positionDepth = Number(ui.positionDepth.value);
-    invalidatePositionPool();
-    void persistPreferences();
-    syncSettingsUI();
-  });
-
   ui.positionBalance.addEventListener("change", () => {
     const nextBalance = normalizePositionBalance(ui.positionBalance.value);
     if (nextBalance !== state.positionBalanceCp) {
@@ -2334,6 +2396,7 @@ function bindEvents() {
     closeSettings();
     closeSetup();
     closeOverlay(ui.aboutDialog);
+    closeOverlay(ui.settingInfoDialog);
     closePromotionDialog();
     state.historyOpen = false;
     syncHistoryPanel();
@@ -2349,7 +2412,6 @@ async function init() {
     state.aiStrength = normalizeLevel(state.aiStrength);
     state.moveAnimation = state.moveAnimation === "instant" ? "instant" : "slide";
     state.positionBalanceCp = normalizePositionBalance(state.positionBalanceCp);
-    state.positionDepth = Number(state.positionDepth) || 12;
     state.friendlyMode = state.friendlyMode !== false;
     state.positionPool = (await loadPositionPool()).filter((candidate) => candidate.settingsKey === getPositionSettingsKey());
   } catch (error) {

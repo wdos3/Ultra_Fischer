@@ -2,6 +2,16 @@
 
 All notable Ultra Fischer changes currently present in this repository are recorded here. Entries are reconstructed from the Git history and include the commit that introduced each change.
 
+## 2026-09-07
+
+### Navigation, settings, and presentation
+
+- Turn the App menu into an icon-led launcher for full-screen Game History, Favorite Games, Statistics, Settings, and Data & Storage views, with a consistent return-to-menu button on each view.
+- Remove the user-facing position-depth control and fix starting-position screening at depth 12; document the finite position space, bundled Stockfish.js WASM/fallback engine, confirmation depth, and local storage behavior in About.
+- Add compact Stockfish-level and Friendly Mode information panels, including the difference between Friendly Mode on and off.
+- Add Dark, Light, Slate, Forest, and Blue color themes with persisted selection.
+- Keep the evaluation-bar column reserved when the bar is hidden so toggling it no longer moves the board or surrounding layout.
+
 ## 2026-09-02
 
 ### Position generation and evaluation
