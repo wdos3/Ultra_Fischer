@@ -42,6 +42,7 @@ const LEGACY_LEVELS = {
 };
 
 const EVALUATION_DEPTH = 16;
+const STOCKFISH_VERSION = "18";
 const POSITION_GENERATION_DEPTH = 12;
 const POSITION_GENERATION_TIMEOUT_MS = 15000;
 const POSITION_SCREEN_LIMIT_CP = 350;
@@ -82,6 +83,9 @@ const ui = {
   historyToggle: document.getElementById("history-toggle"),
   appMenu: document.getElementById("app-menu"),
   menuClose: document.getElementById("menu-close"),
+  recordsMenu: document.getElementById("records-menu"),
+  recordsMenuClose: document.getElementById("records-menu-close"),
+  recordsToggle: document.getElementById("records-toggle"),
   historyDialog: document.getElementById("history-dialog"),
   historyList: document.getElementById("history-list"),
   historyFilter: document.getElementById("history-filter"),
@@ -131,6 +135,13 @@ const ui = {
   promotionDetail: document.getElementById("promotion-detail"),
   promotionDialog: document.getElementById("promotion-dialog"),
   promotionOptions: document.getElementById("promotion-options"),
+  resultDialog: document.getElementById("result-dialog"),
+  resultDetail: document.getElementById("result-detail"),
+  resultDismiss: document.getElementById("result-dismiss"),
+  resultClose: document.getElementById("result-close"),
+  resultMark: document.getElementById("result-mark"),
+  resultNewGame: document.getElementById("result-new-game"),
+  resultTitle: document.getElementById("result-title"),
   resign: document.getElementById("resign"),
   settingsCard: document.getElementById("settings-card"),
   settingsClose: document.getElementById("settings-close"),
@@ -199,8 +210,8 @@ class StockfishEngine {
       typeof WebAssembly === "object" &&
       WebAssembly.validate(Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00));
     this.workerSources = supportsWasm
-      ? ["./engines/stockfish.wasm.js", "./engines/stockfish.js"]
-      : ["./engines/stockfish.js"];
+      ? ["./engines/stockfish-18-lite-single.js", "./engines/stockfish-18-asm.js"]
+      : ["./engines/stockfish-18-asm.js"];
     this.worker = null;
     this.queue = Promise.resolve();
     this.currentTask = null;
@@ -222,7 +233,7 @@ class StockfishEngine {
         this.worker = null;
       }
     }
-    throw lastError || new Error("No Stockfish worker could be started.");
+    throw lastError || new Error(`No Stockfish ${STOCKFISH_VERSION} worker could be started.`);
   }
 
   startWorker(source) {
@@ -552,10 +563,25 @@ function closeAppMenu() {
 }
 
 function openAppMenu() {
+  closeRecordsMenu();
   state.settingsOpen = false;
   closeOverlay(ui.settingsCard);
   openOverlay(ui.appMenu);
   ui.settingsToggle.setAttribute("aria-expanded", "true");
+}
+
+function closeRecordsMenu() {
+  closeOverlay(ui.recordsMenu);
+  ui.recordsToggle.setAttribute("aria-expanded", "false");
+}
+
+function openRecordsMenu() {
+  closeAppMenu();
+  closeOverlay(ui.historyDialog);
+  closeOverlay(ui.favoritesDialog);
+  closeOverlay(ui.statisticsDialog);
+  openOverlay(ui.recordsMenu);
+  ui.recordsToggle.setAttribute("aria-expanded", "true");
 }
 
 function returnToAppMenu() {
@@ -563,6 +589,11 @@ function returnToAppMenu() {
   state.settingsOpen = false;
   void persistPreferences();
   openAppMenu();
+}
+
+function returnToRecordsMenu() {
+  [ui.historyDialog, ui.favoritesDialog, ui.statisticsDialog].forEach(closeOverlay);
+  openRecordsMenu();
 }
 
 function openSettingInfo(topic) {
@@ -576,14 +607,19 @@ function openSettingInfo(topic) {
         ["6–7", "Strong", "Deeper search and longer thinking time"],
         ["8", "Maximum", "Deepest search and longest thinking time"],
       ],
+      advanced: true,
     },
     friendly: {
       title: "Friendly mode",
-      paragraphs: [
-        "Friendly mode screens generated starting positions for practical play. It requires several legal moves and at least two closely scored engine choices, so the opening is less likely to be an immediate one-move trap.",
-        "When Friendly mode is off, the position still respects the starting balance limit, but forced or tactical positions are allowed to appear.",
-      ],
+      paragraphs: ["Friendly mode screens generated starting positions for practical play. Both modes still use the starting balance limit."],
       rows: [],
+      comparison: {
+        headers: ["Friendly mode On", "Friendly mode Off"],
+        rows: [
+          ["Requires several legal moves and at least two closely scored engine choices.", "Allows forced or tactical starts as long as the balance limit passes."],
+          ["Designed to reduce immediate one-move traps.", "Designed to expose the full range of balanced positions."],
+        ],
+      },
     },
   }[topic];
   if (!details) return;
@@ -607,6 +643,44 @@ function openSettingInfo(topic) {
       table.append(levelCell, labelCell, descriptionCell);
     });
     ui.settingInfoBody.appendChild(table);
+  }
+  if (details.comparison) {
+    const comparison = document.createElement("div");
+    comparison.className = "info-comparison";
+    details.comparison.headers.forEach((header) => {
+      const heading = document.createElement("strong");
+      heading.textContent = header;
+      comparison.appendChild(heading);
+    });
+    details.comparison.rows.forEach(([onText, offText]) => {
+      const onCell = document.createElement("span");
+      onCell.textContent = onText;
+      const offCell = document.createElement("span");
+      offCell.textContent = offText;
+      comparison.append(onCell, offCell);
+    });
+    ui.settingInfoBody.appendChild(comparison);
+  }
+  if (details.advanced) {
+    const advanced = document.createElement("details");
+    advanced.className = "info-advanced";
+    const summary = document.createElement("summary");
+    summary.textContent = "Advanced engine specs";
+    advanced.appendChild(summary);
+    const table = document.createElement("div");
+    table.className = "info-advanced-grid";
+    [["Level", "Skill", "Depth", "Time", "MultiPV"], ...Array.from({ length: 8 }, (_, index) => {
+      const config = getLevelConfig(index + 1);
+      return [String(index + 1), String(config.requestedSkill), String(config.depth), `${config.moveTime} ms`, String(config.candidateCount)];
+    })].forEach((row, rowIndex) => {
+      row.forEach((value) => {
+        const cell = document.createElement(rowIndex === 0 ? "strong" : "span");
+        cell.textContent = value;
+        table.appendChild(cell);
+      });
+    });
+    advanced.appendChild(table);
+    ui.settingInfoBody.appendChild(advanced);
   }
   openOverlay(ui.settingInfoDialog);
 }
@@ -906,6 +980,7 @@ async function refreshStorageSummary() {
 
 async function openPanel(panel) {
   closeAppMenu();
+  closeRecordsMenu();
   const panels = { history: ui.historyDialog, favorites: ui.favoritesDialog, statistics: ui.statisticsDialog, data: ui.dataDialog, settings: ui.settingsCard };
   const element = panels[panel];
   if (!element) return;
@@ -1005,6 +1080,21 @@ function syncActionAvailability() {
   ui.hintButton.disabled = blocked;
 }
 
+function terminalEvaluation(overrides = {}) {
+  if (game.in_checkmate()) {
+    return { type: "mate", value: game.turn() === "w" ? -1 : 1, depth: EVALUATION_DEPTH, terminal: true };
+  }
+  const result = overrides.result || (game.in_draw() ? "draw" : null);
+  if (result === "draw") {
+    return { type: "cp", value: 0, depth: EVALUATION_DEPTH, terminal: true };
+  }
+  if (result === "win" || result === "loss") {
+    const whiteWon = result === "win" ? state.actualPlayerColor === "w" : state.actualPlayerColor === "b";
+    return { type: "mate", value: whiteWon ? 1 : -1, depth: EVALUATION_DEPTH, terminal: true };
+  }
+  return null;
+}
+
 function cancelEngineSearches() {
   new Set([state.analysisEngine, state.opponentEngine].filter(Boolean)).forEach((engine) => {
     engine.cancelPending();
@@ -1016,13 +1106,55 @@ async function finishMatch(message, overrides = {}) {
   cancelEngineSearches();
   state.matchOver = true;
   setBusy(false);
+  const finalEvaluation = terminalEvaluation(overrides);
+  if (finalEvaluation) {
+    updateEvalBar(finalEvaluation);
+  }
   setStatus(message);
+  showResultDialog(message, overrides);
   try {
     await saveCurrentGame(overrides);
   } catch (error) {
     console.error(error);
     showToast("The game ended, but the local record could not be saved.");
   }
+}
+
+function playResultTone(result) {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const context = new AudioContext();
+    const frequencies = result === "win" ? [660, 880] : result === "loss" ? [330, 220] : [440, 440];
+    frequencies.forEach((frequency, index) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.frequency.value = frequency;
+      oscillator.type = "sine";
+      gain.gain.setValueAtTime(0.0001, context.currentTime + index * 0.14);
+      gain.gain.exponentialRampToValueAtTime(0.08, context.currentTime + index * 0.14 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + index * 0.14 + 0.16);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(context.currentTime + index * 0.14);
+      oscillator.stop(context.currentTime + index * 0.14 + 0.18);
+    });
+    window.setTimeout(() => void context.close(), 700);
+  } catch (error) {
+    console.debug("Result sound was unavailable.", error);
+  }
+}
+
+function showResultDialog(message, overrides = {}) {
+  const result = overrides.result || gameResult().result || "draw";
+  const title = result === "win" ? "You win" : result === "loss" ? "You lose" : "Draw";
+  const mark = result === "win" ? "✓" : result === "loss" ? "!" : "=";
+  ui.resultDialog.dataset.result = result;
+  ui.resultTitle.textContent = title;
+  ui.resultMark.textContent = mark;
+  ui.resultDetail.textContent = message;
+  openOverlay(ui.resultDialog);
+  playResultTone(result);
 }
 
 function updateSideLabels() {
@@ -2087,6 +2219,7 @@ function closeSetup() {
 
 function bindEvents() {
   ui.newGame.addEventListener("click", () => {
+    closeOverlay(ui.resultDialog);
     state.pendingStartFen = null;
     state.setupOpen = true;
     state.settingsOpen = false;
@@ -2183,14 +2316,27 @@ function bindEvents() {
     if (ui.appMenu.classList.contains("hidden")) openAppMenu(); else closeAppMenu();
   });
 
+  ui.recordsToggle.addEventListener("click", () => {
+    if (ui.recordsMenu.classList.contains("hidden")) openRecordsMenu(); else closeRecordsMenu();
+  });
+
   ui.menuClose.addEventListener("click", closeAppMenu);
+  ui.recordsMenuClose.addEventListener("click", closeRecordsMenu);
   ui.appMenu.addEventListener("click", (event) => {
     if (event.target === ui.appMenu) closeAppMenu();
     const button = event.target.closest("[data-panel]");
     if (button) void openPanel(button.dataset.panel);
   });
+  ui.recordsMenu.addEventListener("click", (event) => {
+    if (event.target === ui.recordsMenu) closeRecordsMenu();
+    const button = event.target.closest("[data-panel]");
+    if (button) void openPanel(button.dataset.panel);
+  });
   document.querySelectorAll("[data-back-menu]").forEach((button) => {
     button.addEventListener("click", returnToAppMenu);
+  });
+  document.querySelectorAll("[data-back-records]").forEach((button) => {
+    button.addEventListener("click", returnToRecordsMenu);
   });
   document.querySelectorAll("[data-close-panel]").forEach((button) => {
     button.addEventListener("click", () => closePanel(document.getElementById(button.dataset.closePanel)));
@@ -2337,6 +2483,16 @@ function bindEvents() {
     }
   });
 
+  ui.resultClose.addEventListener("click", () => closeOverlay(ui.resultDialog));
+  ui.resultDismiss.addEventListener("click", () => closeOverlay(ui.resultDialog));
+  ui.resultNewGame.addEventListener("click", () => {
+    closeOverlay(ui.resultDialog);
+    ui.newGame.click();
+  });
+  ui.resultDialog.addEventListener("click", (event) => {
+    if (event.target === ui.resultDialog) closeOverlay(ui.resultDialog);
+  });
+
   ui.evalToggle.addEventListener("click", async () => {
     state.evalVisible = !state.evalVisible;
     state.evalVisibilityConfigured = true;
@@ -2395,8 +2551,11 @@ function bindEvents() {
     }
     closeSettings();
     closeSetup();
+    closeAppMenu();
+    closeRecordsMenu();
     closeOverlay(ui.aboutDialog);
     closeOverlay(ui.settingInfoDialog);
+    closeOverlay(ui.resultDialog);
     closePromotionDialog();
     state.historyOpen = false;
     syncHistoryPanel();

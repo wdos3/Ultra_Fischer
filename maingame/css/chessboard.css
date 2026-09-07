@@ -558,11 +558,22 @@ a:focus-visible {
 }
 
 .record-badge::before {
-  border: 1px solid currentColor;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
   content: "";
   display: inline-block;
-  height: 8px;
-  width: 8px;
+  flex: 0 0 18px;
+  height: 18px;
+  width: 18px;
+}
+
+.record-badge[data-side="w"]::before {
+  background-image: url("../img/chesspieces/wikipedia/wK.png");
+}
+
+.record-badge[data-side="b"]::before {
+  background-image: url("../img/chesspieces/wikipedia/bK.png");
 }
 
 .record-color.is-white,
@@ -1240,6 +1251,108 @@ body.eval-hidden .micro-button {
 .info-table strong {
   color: var(--text);
   font-size: 11px;
+}
+
+.info-comparison {
+  border: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 14px;
+}
+
+.info-comparison > * {
+  border-bottom: 1px solid var(--border);
+  padding: 9px;
+}
+
+.info-comparison > :nth-child(odd) {
+  border-right: 1px solid var(--border);
+}
+
+.info-comparison > strong {
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.info-comparison > span {
+  font-size: 11px;
+}
+
+.info-advanced {
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+  padding-top: 10px;
+}
+
+.info-advanced summary {
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.info-advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+.info-advanced-grid > * {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 4px;
+}
+
+.info-advanced-grid strong,
+.info-advanced-grid span {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.info-advanced-grid strong {
+  color: var(--faint);
+  text-transform: uppercase;
+}
+
+.result-surface {
+  max-width: 420px;
+  text-align: center;
+}
+
+.result-surface .overlay-head {
+  text-align: left;
+}
+
+.result-mark {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 50%;
+  color: #1b150e;
+  display: flex;
+  font-size: 22px;
+  font-weight: 700;
+  height: 46px;
+  justify-content: center;
+  margin: 2px auto 12px;
+  width: 46px;
+}
+
+#result-dialog[data-result="loss"] .result-mark {
+  background: var(--danger);
+}
+
+#result-dialog[data-result="draw"] .result-mark {
+  background: var(--muted);
+}
+
+.result-detail {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.result-surface .setup-actions {
+  justify-content: center;
 }
 
 .menu-item small,

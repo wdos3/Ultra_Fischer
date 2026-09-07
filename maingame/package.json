@@ -14,7 +14,7 @@
   ],
   "dependencies": {
     "jquery": ">=3.4.1",
-    "stockfish.js": "^10.0.2"
+    "stockfish": "18.0.8"
   },
   "devDependencies": {
     "csso": "3.5.1",

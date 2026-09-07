@@ -12,6 +12,13 @@ All notable Ultra Fischer changes currently present in this repository are recor
 - Add Dark, Light, Slate, Forest, and Blue color themes with persisted selection.
 - Keep the evaluation-bar column reserved when the bar is hidden so toggling it no longer moves the board or surrounding layout.
 
+### Engine, records, and game outcomes
+
+- Replace the legacy Stockfish 10-era browser workers with the Stockfish.js 18 lite single-threaded WASM build and an ASM-JS fallback, retaining the worker-based UCI interface.
+- Move Game History, Favorite Games, and Statistics into a dedicated records menu beside the App menu, and replace the record-summary squares with side-specific king icons.
+- Add an advanced Stockfish-level specification table and a Friendly Mode on/off comparison table.
+- Show terminal mate evaluations as `M+1`/`M-1` instead of leaving the previous evaluation in place, and add a clear win/loss/draw result overlay with a short best-effort tone.
+
 ## 2026-09-02
 
 ### Position generation and evaluation
