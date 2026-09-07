@@ -43,6 +43,7 @@ const LEGACY_LEVELS = {
 
 const EVALUATION_DEPTH = 16;
 const STOCKFISH_VERSION = "18";
+const ENGINE_STARTUP_TIMEOUT_MS = 20000;
 const POSITION_GENERATION_DEPTH = 12;
 const POSITION_GENERATION_TIMEOUT_MS = 15000;
 const POSITION_SCREEN_LIMIT_CP = 350;
@@ -242,7 +243,7 @@ class StockfishEngine {
       let settled = false;
       const timeoutId = window.setTimeout(() => {
         fail(new Error(`Stockfish worker timed out while loading (${source}).`));
-      }, 8000);
+      }, ENGINE_STARTUP_TIMEOUT_MS);
       const cleanup = () => {
         window.clearTimeout(timeoutId);
         this.initResolver = null;
