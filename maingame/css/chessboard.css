@@ -1042,15 +1042,24 @@ body.eval-hidden .micro-button {
   }
 
   .eval-readout {
+    background: var(--bg-panel);
+    font-size: 12px;
     left: 50%;
-    top: -25px;
-    transform: translateX(-50%);
+    padding: 0 4px;
+    top: 50%;
+    transform: translate(-50%, -50%);
   }
 
   .micro-button {
+    background: #000;
     bottom: auto;
-    left: -28px;
-    top: -5px;
+    color: #fff;
+    font-size: 12px;
+    height: 16px;
+    left: 0;
+    min-width: 16px;
+    top: 0;
+    width: 16px;
   }
 
   .game-panel {

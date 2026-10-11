@@ -2,10 +2,16 @@
   "name": "ultra_fischer",
   "private": true,
   "scripts": {
-    "test": "node --test maingame/js/storage.test.mjs maingame/js/stockfish-config.test.mjs maingame/js/position-utils.test.mjs",
-    "check": "node --check maingame/js/storage.mjs && node --check maingame/js/chessboard.js && node --check maingame/js/stockfish-config.mjs && node --check maingame/js/position-utils.mjs"
+    "test": "node --test maingame/js/*.test.mjs",
+    "check": "node tests/check.mjs",
+    "test:browser": "playwright test",
+    "dev": "node tests/server.mjs"
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "fake-indexeddb": "^6.2.5"
   }
 }

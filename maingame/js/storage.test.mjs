@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import "fake-indexeddb/auto";
+import { IDBObjectStore } from "fake-indexeddb";
 import {
   isValidFen,
   MAX_POSITION_BALANCE_CP,
@@ -7,9 +9,27 @@ import {
   normalizeFen,
   normalizePositionBalance,
   validateBackup,
+  createGame,
+  getGame,
+  listGames,
+  listGamesPage,
+  clearGames,
+  saveGameProgress,
+  setGameFavorite,
+  renameGame,
+  deleteGame,
+  importBackup,
+  getPreferences,
+  getStatistics,
 } from "./storage.mjs";
 
 const startingFen = "7k/8/8/8/8/8/8/K7 w - - 0 1";
+const preferences = new Map();
+globalThis.localStorage = {
+  getItem: (key) => preferences.get(key) ?? null,
+  setItem: (key, value) => preferences.set(key, String(value)),
+  removeItem: (key) => preferences.delete(key),
+};
 
 test("validates and normalizes FEN values", () => {
   assert.equal(isValidFen(startingFen), true);
@@ -24,7 +44,7 @@ test("keeps the starting balance setting within the supported range", () => {
   assert.equal(normalizePositionBalance(MAX_POSITION_BALANCE_CP + 1), MAX_POSITION_BALANCE_CP);
 });
 
-test("validates a backup and discards malformed records", () => {
+test("validates legacy backups without silently discarding records", () => {
   const backup = validateBackup({
     format: "ultra-fischer-backup",
     version: 1,
@@ -40,6 +60,86 @@ test("validates a backup and discards malformed records", () => {
   assert.equal(backup.preferences.positionBalanceCp, MIN_POSITION_BALANCE_CP);
   assert.equal(backup.preferences.friendlyMode, true);
   assert.throws(() => validateBackup({ format: "other", version: 1, games: [], savedPositions: [] }));
+});
+
+test("rejects missing kings, adjacent kings, edge-rank pawns, and invalid counters", () => {
+  for (const fen of [
+    "8/8/8/8/8/8/8/8 w - - 0 1",
+    "8/8/8/8/8/8/k7/K7 w - - 0 1",
+    "P6k/8/8/8/8/8/8/K7 w - - 0 1",
+    startingFen.replace("0 1", "-1 1"),
+    startingFen.replace("0 1", "0 0"),
+  ]) assert.equal(isValidFen(fen), false, fen);
+});
+
+test("invalid replacement backups leave existing games untouched", async () => {
+  await clearGames();
+  await createGame({ id: "protected", startingFen, moves: [] });
+  for (const record of [
+    { startingFen: "8/8/8/8/8/8/8/8 w - - 0 1", moves: [] },
+    { startingFen, moves: ["Qxg7"] },
+    { startingFen, moves: [], currentFen: startingFen.replace(" w ", " b ") },
+  ]) {
+    await assert.rejects(importBackup({ format: "Ultra_Fischer-backup", version: 1, games: [record], favoriteGames: [] }, "replace"));
+    assert.equal((await getGame("protected")).id, "protected");
+  }
+});
+
+test("replacement rolls back all records and preferences if a write fails", async () => {
+  await clearGames();
+  await createGame({ id: "protected", startingFen, moves: [] });
+  const before = await getPreferences();
+  const original = IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put = function (record) {
+    if (record.id === "fail") throw new DOMException("Quota exhausted", "QuotaExceededError");
+    return original.call(this, record);
+  };
+  try {
+    await assert.rejects(importBackup({
+      format: "Ultra_Fischer-backup", version: 1,
+      games: [{ id: "first", startingFen, moves: [] }, { id: "fail", startingFen, moves: [] }],
+      favoriteGames: [], preferences: { theme: "blue" },
+    }, "replace"), /existing games were not replaced/);
+  } finally { IDBObjectStore.prototype.put = original; }
+  assert.deepEqual((await listGames()).map((game) => game.id), ["protected"]);
+  assert.deepEqual(await getPreferences(), before);
+});
+
+test("indexed history pagination has no duplicates when timestamps tie", async () => {
+  await clearGames();
+  for (let index = 0; index < 53; index += 1) {
+    await createGame({ id: String(index).padStart(3, "0"), startingFen, moves: [], updatedAt: 1000, isFavorite: index % 2 === 0 });
+  }
+  const first = await listGamesPage({ limit: 50 });
+  const second = await listGamesPage({ limit: 50, after: first.nextCursor });
+  assert.equal(first.items.length, 50);
+  assert.equal(second.items.length, 3);
+  assert.equal(new Set([...first.items, ...second.items].map((game) => game.id)).size, 53);
+  const favorites = await listGamesPage({ filter: "favorite" });
+  assert.equal(favorites.items.length, 27);
+});
+
+test("autosaves preserve archive edits and never resurrect deleted records", async () => {
+  await clearGames();
+  const game = await createGame({ id: "active", startingFen, moves: [], isFavorite: true });
+  await renameGame(game.id, "Renamed");
+  await setGameFavorite(game.id, false);
+  const saved = await saveGameProgress(game);
+  assert.equal(saved.label, "Renamed");
+  assert.equal(saved.isFavorite, false);
+  await deleteGame(game.id);
+  assert.equal(await saveGameProgress(game), null);
+  assert.equal(await getGame(game.id), undefined);
+});
+
+test("AI statistics exclude local PvP records", async () => {
+  await clearGames();
+  await createGame({ id: "local", startingFen, mode: "pvp", status: "completed", result: "win" });
+  await createGame({ id: "ai", startingFen, mode: "pvai", status: "completed", result: "loss" });
+  const stats = await getStatistics();
+  assert.equal(stats.total, 1);
+  assert.equal(stats.wins, 0);
+  assert.equal(stats.losses, 1);
 });
 
 test("keeps terminated games distinct from completed results and accepts favorite-game backups", () => {

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   getLevelConfig,
   resolveEngineDifficulty,
+  selectCandidateMove,
 } from "./stockfish-config.mjs";
 
 const installedOptions = {
@@ -23,6 +24,16 @@ test("level profiles keep the requested depth and move time", () => {
     getLevelConfig(8),
     { requestedSkill: 20, depth: 22, moveTime: 1000, candidateCount: 1 }
   );
+});
+
+test("winning mates outrank cp scores and losing mates prefer the longest survival", () => {
+  const candidate = (move, type, value) => ({ move, score: { type, value } });
+  assert.equal(selectCandidateMove([
+    candidate("a1a2", "cp", 900), candidate("a1b1", "mate", 2), candidate("a1b2", "mate", 1),
+  ], 1), "a1b2");
+  assert.equal(selectCandidateMove([
+    candidate("a1a2", "mate", -1), candidate("a1b1", "mate", -10),
+  ], 1), "a1b1");
 });
 
 test("unsupported negative skill values remain distinct", () => {

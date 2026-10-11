@@ -1,6 +1,8 @@
+import { isValidChessFen, replayGame, buildPgn, resultCode } from "./chess-rules.mjs";
+
 const DB_NAME = "Ultra_Fischer";
 const LEGACY_DB_NAME = "ultra-fischer";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const PREFERENCES_KEY = "Ultra_Fischer.preferences";
 const POSITION_POOL_KEY = "Ultra_Fischer.position-pool";
 const LEGACY_PREFERENCES_KEY = "ultraFischer.preferences";
@@ -82,27 +84,7 @@ function normalizePreferences(preferences = {}) {
 }
 
 export function isValidFen(fen) {
-  const fields = normalizeFen(fen).split(" ");
-  if (fields.length !== 6 || !/^[wb]$/.test(fields[1]) || !/^(?:-|[KQkq]{1,4})$/.test(fields[2]) || !/^(?:-|[a-h][36])$/.test(fields[3])) {
-    return false;
-  }
-  const rows = fields[0].split("/");
-  if (rows.length !== 8) {
-    return false;
-  }
-  return rows.every((row) => {
-    let width = 0;
-    for (const char of row) {
-      if (/^[1-8]$/.test(char)) {
-        width += Number(char);
-      } else if (/^[prnbqkPRNBQK]$/.test(char)) {
-        width += 1;
-      } else {
-        return false;
-      }
-    }
-    return width === 8;
-  });
+  return isValidChessFen(normalizeFen(fen));
 }
 
 function configureObjectStores(database, transaction) {
@@ -114,6 +96,20 @@ function configureObjectStores(database, transaction) {
       games.createIndex(index, index, { unique: false });
     }
   }
+  for (const [name, keyPath] of Object.entries({
+    updatedAtId: ["updatedAt", "id"],
+    statusUpdated: ["status", "updatedAt", "id"],
+    resultUpdated: ["result", "updatedAt", "id"],
+    favoriteUpdated: ["favoriteKey", "updatedAt", "id"],
+  })) {
+    if (!games.indexNames.contains(name)) games.createIndex(name, keyPath);
+  }
+  const cursor = games.openCursor();
+  cursor.addEventListener("success", () => {
+    if (!cursor.result) return;
+    cursor.result.update({ ...cursor.result.value, mode: cursor.result.value.mode || "pvai", favoriteKey: cursor.result.value.isFavorite ? 1 : 0 });
+    cursor.result.continue();
+  });
   const positions = database.objectStoreNames.contains("savedPositions")
     ? transaction.objectStore("savedPositions")
     : database.createObjectStore("savedPositions", { keyPath: "id" });
@@ -133,7 +129,7 @@ function openNamedDatabase(name, version) {
     request.addEventListener("upgradeneeded", () => configureObjectStores(request.result, request.transaction));
     request.addEventListener("success", () => {
       const database = request.result;
-      database.addEventListener("versionchange", () => database.close());
+      database.addEventListener("versionchange", () => { database.close(); databasePromise = null; });
       resolve(database);
     }, { once: true });
     request.addEventListener("error", () => reject(request.error || new Error(`Could not open ${name} storage.`)), { once: true });
@@ -170,7 +166,7 @@ async function migrateLegacyDatabase(database) {
       readStore(legacyDatabase, "savedPositions"),
     ]);
     const transaction = database.transaction(["games", "savedPositions", "meta"], "readwrite");
-    games.forEach((game) => transaction.objectStore("games").put(game));
+    games.forEach((game) => transaction.objectStore("games").put({ ...game, ...cleanGame(game) }));
     positions.forEach((position) => transaction.objectStore("savedPositions").put(position));
     transaction.objectStore("meta").put({ id: "legacy-migrated", migratedAt: Date.now() });
     await transactionToPromise(transaction);
@@ -191,17 +187,24 @@ function openDatabase() {
   databasePromise = openNamedDatabase(DB_NAME, DB_VERSION).then(async (database) => {
     await migrateLegacyDatabase(database);
     return database;
-  });
+  }).catch((error) => { databasePromise = null; throw error; });
   return databasePromise;
 }
 
 async function withStore(storeName, mode, callback) {
   const database = await openDatabase();
   const transaction = database.transaction(storeName, mode);
-  const store = transaction.objectStore(storeName);
-  const result = await callback(store, transaction);
-  await transactionToPromise(transaction);
-  return result;
+  const completion = transactionToPromise(transaction);
+  completion.catch(() => null);
+  try {
+    const result = await callback(transaction.objectStore(storeName), transaction);
+    await completion;
+    return result;
+  } catch (error) {
+    try { transaction.abort(); } catch { /* An already-finished transaction cannot be aborted. */ }
+    await completion.catch(() => null);
+    throw error;
+  }
 }
 
 function readPreferences() {
@@ -278,7 +281,7 @@ function cleanPositionPoolCandidate(candidate) {
   const score = candidate.score && ["cp", "mate"].includes(candidate.score.type) && Number.isFinite(Number(candidate.score.value))
     ? { type: candidate.score.type, value: Number(candidate.score.value), depth: Number(candidate.score.depth) || 0 }
     : null;
-  return { fen: normalizeFen(candidate.fen), score, settingsKey: candidate.settingsKey, sideToMove: candidate.sideToMove };
+  return { fen: normalizeFen(candidate.fen), score, alternatives: Array.isArray(candidate.alternatives) ? candidate.alternatives.slice(0, 4) : [], settingsKey: candidate.settingsKey, sideToMove: candidate.sideToMove };
 }
 
 export function loadPositionPool() {
@@ -312,22 +315,29 @@ function cleanGame(record) {
     label: String(record.label || "Game").slice(0, 120),
     startingFen: normalizeFen(record.startingFen),
     currentFen: normalizeFen(record.currentFen || record.startingFen),
+    mode: record.mode === "pvp" ? "pvp" : "pvai",
     playerColor: record.playerColor === "b" ? "b" : "w",
     engineColor: record.engineColor === "w" ? "w" : "b",
     stockfishLevel: Math.max(1, Math.min(8, Number(record.stockfishLevel) || 4)),
     status,
     result: status === "completed" && ["win", "draw", "loss"].includes(record.result) ? record.result : null,
-    termination: record.termination || null,
+    termination: typeof record.termination === "string" ? record.termination.slice(0, 120) : null,
     moves: Array.isArray(record.moves) ? record.moves.map((move) => String(move)).slice(0, 1000) : [],
     pgn: String(record.pgn || "").slice(0, 100000),
     isFavorite: Boolean(record.isFavorite),
-    startedAt: Number(record.startedAt) || now,
-    updatedAt: Number(record.updatedAt) || now,
-    finishedAt: ["completed", "terminated"].includes(status) ? (record.finishedAt ? Number(record.finishedAt) : now) : null,
+    favoriteKey: record.isFavorite ? 1 : 0,
+    startedAt: normalizeTimestamp(record.startedAt, now),
+    updatedAt: normalizeTimestamp(record.updatedAt, now),
+    finishedAt: ["completed", "terminated"].includes(status) ? normalizeTimestamp(record.finishedAt, now) : null,
     initialEvaluation: record.initialEvaluation || null,
     finalEvaluation: record.finalEvaluation || null,
     moveCount: Number(record.moveCount) || (Array.isArray(record.moves) ? record.moves.length : 0),
   };
+}
+
+function normalizeTimestamp(value, fallback) {
+  const timestamp = Number(value);
+  return Number.isSafeInteger(timestamp) && timestamp > 0 && timestamp <= 8640000000000000 ? timestamp : fallback;
 }
 
 export async function createGame(record) {
@@ -340,6 +350,44 @@ export async function updateGame(record) {
   const game = cleanGame(record);
   await withStore("games", "readwrite", (store) => requestToPromise(store.put(game)));
   return game;
+}
+
+export async function saveGameProgress(record) {
+  return withStore("games", "readwrite", async (store) => {
+    const existing = await requestToPromise(store.get(record.id));
+    if (!existing) return null;
+    const outcome = existing.status !== "in_progress" ? { status: existing.status, result: existing.result, termination: existing.termination, finishedAt: existing.finishedAt } : {};
+    const next = cleanGame({ ...record, ...outcome, label: existing.label, isFavorite: existing.isFavorite });
+    await requestToPromise(store.put(next));
+    return next;
+  });
+}
+
+export async function listGamesPage({ filter = "all", sort = "newest", after = null, limit = 50 } = {}) {
+  const size = Math.max(1, Math.min(100, limit));
+  const prefix = filter === "favorite" ? 1 : filter;
+  const name = filter === "all" ? "updatedAtId" : filter === "favorite" ? "favoriteUpdated"
+    : ["in_progress", "terminated", "completed"].includes(filter) ? "statusUpdated" : "resultUpdated";
+  const lower = name === "updatedAtId" ? [0, ""] : [prefix, 0, ""];
+  const upper = name === "updatedAtId" ? [Number.MAX_SAFE_INTEGER, []] : [prefix, Number.MAX_SAFE_INTEGER, []];
+  const ascending = sort === "oldest";
+  const range = IDBKeyRange.bound(ascending && after ? after : lower, !ascending && after ? after : upper, Boolean(ascending && after), Boolean(!ascending && after));
+  return withStore("games", "readonly", (store) => new Promise((resolve, reject) => {
+    const items = [];
+    let lastKey = null;
+    const request = store.index(name).openCursor(range, ascending ? "next" : "prev");
+    request.addEventListener("error", () => reject(request.error));
+    request.addEventListener("success", () => {
+      const cursor = request.result;
+      if (!cursor || items.length === size) {
+        resolve({ items, nextCursor: cursor ? lastKey : null });
+        return;
+      }
+      items.push(cursor.value);
+      lastKey = cursor.key;
+      cursor.continue();
+    });
+  }));
 }
 
 export async function getGame(id) {
@@ -355,13 +403,17 @@ export async function listGames({ status = "all", favorite = false, sort = "newe
 }
 
 export async function setGameFavorite(id, isFavorite) {
-  const game = await getGame(id);
-  if (!game) {
-    return null;
-  }
-  game.isFavorite = Boolean(isFavorite);
-  game.updatedAt = Date.now();
-  return updateGame(game);
+  return patchGameMetadata(id, { isFavorite: Boolean(isFavorite) });
+}
+
+async function patchGameMetadata(id, patch) {
+  return withStore("games", "readwrite", async (store) => {
+    const existing = await requestToPromise(store.get(id));
+    if (!existing) return null;
+    const next = cleanGame({ ...existing, ...patch, updatedAt: Date.now() });
+    await requestToPromise(store.put(next));
+    return next;
+  });
 }
 
 export async function listFavoriteGames({ sort = "newest" } = {}) {
@@ -375,13 +427,7 @@ export async function clearGameFavorites() {
 }
 
 export async function renameGame(id, label) {
-  const game = await getGame(id);
-  if (!game) {
-    return null;
-  }
-  game.label = String(label || "Game").trim().slice(0, 120) || "Game";
-  game.updatedAt = Date.now();
-  return updateGame(game);
+  return patchGameMetadata(id, { label: String(label || "Game").trim().slice(0, 120) || "Game" });
 }
 
 export async function deleteGame(id) {
@@ -441,7 +487,7 @@ export async function clearSavedPositions() {
 }
 
 export async function getStatistics() {
-  const games = await listGames();
+  const games = (await listGames()).filter((record) => record.mode !== "pvp");
   const completed = games.filter((game) => game.status === "completed");
   const terminated = games.filter((game) => game.status === "terminated");
   const stats = { total: completed.length, terminated: terminated.length, wins: 0, draws: 0, losses: 0, winRate: 0, levels: {} };
@@ -473,57 +519,66 @@ export async function getStorageSummary() {
 }
 
 function sanitizeBackupGame(record) {
-  if (!record || typeof record !== "object" || !isValidFen(record.startingFen) || !isValidFen(record.currentFen || record.startingFen)) {
-    return null;
-  }
-  return cleanGame(record);
+  if (!record || typeof record !== "object") throw new Error("A backup game is not an object.");
+  const replay = replayGame(record.startingFen, record.moves || [], record.currentFen || record.startingFen);
+  const clean = cleanGame({ ...record, moves: replay.moves.map((move) => move.san) });
+  clean.pgn = buildPgn(clean.startingFen, clean.moves, resultCode(clean.result, clean.playerColor));
+  return clean;
 }
 
 export function validateBackup(backup) {
-  const hasFavoriteGames = Array.isArray(backup?.favoriteGames);
-  const hasLegacyPositions = Array.isArray(backup?.savedPositions);
-  if (!backup || ![BACKUP_FORMAT, LEGACY_BACKUP_FORMAT].includes(backup.format) || backup.version !== BACKUP_VERSION || !Array.isArray(backup.games) || (!hasFavoriteGames && !hasLegacyPositions)) {
-    throw new Error("This file is not a valid Ultra_Fischer backup.");
+  if (!backup || ![BACKUP_FORMAT, LEGACY_BACKUP_FORMAT].includes(backup.format) || backup.version !== BACKUP_VERSION
+      || !Array.isArray(backup.games) || (!Array.isArray(backup.favoriteGames) && !Array.isArray(backup.savedPositions))) {
+    throw new Error("This file is not a valid Ultra Fischer backup.");
   }
-  const games = backup.games.map(sanitizeBackupGame).filter(Boolean);
-  const favoriteGames = (backup.favoriteGames || []).map(sanitizeBackupGame).filter(Boolean);
-  const savedPositions = (backup.savedPositions || []).map((position) => {
-    try {
-      return cleanPosition(position);
-    } catch (error) {
-      return null;
-    }
-  }).filter(Boolean);
-  const preferences = normalizePreferences(backup.preferences || {});
-  return { games, favoriteGames, savedPositions, preferences };
+  const validateRecords = (records, validate, label) => records.map((record, index) => {
+    try { return validate(record); }
+    catch (cause) { throw new Error(`${label} ${index + 1}: ${cause.message}`, { cause }); }
+  });
+  return {
+    games: validateRecords(backup.games, sanitizeBackupGame, "Game"),
+    favoriteGames: validateRecords(backup.favoriteGames || [], sanitizeBackupGame, "Favorite"),
+    savedPositions: validateRecords(backup.savedPositions || [], cleanPosition, "Position"),
+    preferences: normalizePreferences(backup.preferences || {}),
+  };
 }
 
 export async function exportBackup() {
-  const [games, preferences] = await Promise.all([listGames(), getPreferences()]);
-  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt: new Date().toISOString(), games, favoriteGames: games.filter((game) => game.isFavorite), preferences };
+  const [games, preferences, savedPositions] = await Promise.all([listGames(), getPreferences(), listSavedPositions()]);
+  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt: new Date().toISOString(), games, favoriteGames: games.filter((record) => record.isFavorite), savedPositions, preferences };
 }
 
 export async function importBackup(backup, mode = "merge") {
+  if (!["merge", "replace"].includes(mode)) throw new Error("Unknown import mode.");
   const valid = validateBackup(backup);
-  if (mode === "replace") {
-    await Promise.all([clearGames(), clearSavedPositions()]);
-  }
-  const existingGames = await listGames();
-  const existingPositions = await listSavedPositions();
-  const gameIds = new Set(existingGames.map((game) => game.id));
-  const positionFens = new Set(existingPositions.map((position) => position.fen));
-  const favoriteIds = new Set(valid.favoriteGames.map((game) => game.id));
-  const importedGames = valid.games.map((game) => favoriteIds.has(game.id) ? { ...game, isFavorite: true } : game);
-  for (const game of valid.favoriteGames) {
-    if (!importedGames.some((item) => item.id === game.id)) importedGames.push({ ...game, isFavorite: true });
-  }
-  for (const game of importedGames) {
-    if (gameIds.has(game.id)) await updateGame(game); else await createGame(game);
-  }
-  for (const position of valid.savedPositions) {
-    if (!positionFens.has(position.fen)) await savePosition(position);
-  }
+  const imported = new Map(valid.games.map((record) => [record.id, record]));
+  for (const favorite of valid.favoriteGames) imported.set(favorite.id, { ...(imported.get(favorite.id) || favorite), isFavorite: true, favoriteKey: 1 });
+  const database = await openDatabase();
+  const previousPreferences = localStorage.getItem(PREFERENCES_KEY);
   await savePreferences(valid.preferences);
+  try {
+    // One transaction makes replacement all-or-nothing, including quota failures.
+    const transaction = database.transaction(["games", "savedPositions"], "readwrite");
+    const completion = transactionToPromise(transaction);
+    completion.catch(() => null);
+    try {
+      if (mode === "replace") {
+        transaction.objectStore("games").clear();
+        transaction.objectStore("savedPositions").clear();
+      }
+      for (const record of imported.values()) transaction.objectStore("games").put(record);
+      for (const position of valid.savedPositions) transaction.objectStore("savedPositions").put(position);
+    } catch (error) {
+      transaction.abort();
+      await completion.catch(() => null);
+      throw error;
+    }
+    await completion;
+  } catch (error) {
+    if (previousPreferences === null) localStorage.removeItem(PREFERENCES_KEY);
+    else localStorage.setItem(PREFERENCES_KEY, previousPreferences);
+    throw new Error("Import failed; existing games were not replaced.", { cause: error });
+  }
   return valid;
 }
 

@@ -1,14 +1,15 @@
 import {
   ANALYSIS_PROFILE,
   getLevelConfig,
-  resolveEngineDifficulty,
-  selectCandidateMove,
 } from "./stockfish-config.mjs";
-import {
-  areBishopsOnOppositeColors,
-  getBishopPlacementCandidates,
-  getSquareColor,
-} from "./position-utils.mjs";
+import { StockfishEngine } from "./stockfish-engine.mjs";
+import { generatePosition, generateBalancedPosition as findBalancedPosition } from "./position-generator.mjs";
+import { positionSettingsKey, cachedPositionAccepted } from "./position-policy.mjs";
+import { buildPgn, replayGame, detectResult, resultCode } from "./chess-rules.mjs";
+import { GameSession } from "./game-session.mjs";
+import { MoveRecordView } from "./move-record.mjs";
+import { RecordsView } from "./records-view.mjs";
+
 import {
   clearGameFavorites,
   clearGames,
@@ -17,12 +18,14 @@ import {
   deleteGame,
   exportBackup,
   getPreferences,
+  getGame,
+  listGamesPage,
+  saveGameProgress,
   getStatistics,
   getStorageSummary,
   importBackup,
+  validateBackup,
   loadPositionPool,
-  listFavoriteGames,
-  listGames,
   MAX_POSITION_BALANCE_CP,
   MIN_POSITION_BALANCE_CP,
   normalizePositionBalance,
@@ -42,26 +45,8 @@ const LEGACY_LEVELS = {
 };
 
 const EVALUATION_DEPTH = 16;
-const STOCKFISH_VERSION = "18";
-const ENGINE_STARTUP_TIMEOUT_MS = 20000;
-const POSITION_GENERATION_DEPTH = 12;
 const POSITION_GENERATION_TIMEOUT_MS = 15000;
-const POSITION_SCREEN_LIMIT_CP = 350;
-const POSITION_FRIENDLY_MIN_LEGAL_MOVES = 3;
-const POSITION_FRIENDLY_MIN_ENGINE_MOVES = 2;
-const POSITION_FRIENDLY_ENGINE_MOVE_MARGIN_CP = 125;
-const POSITION_FRIENDLY_CANDIDATE_COUNT = 4;
 const POSITION_POOL_LIMIT = 2;
-const POSITION_SCREEN_PROFILE = Object.freeze({
-  ...ANALYSIS_PROFILE,
-  depth: POSITION_GENERATION_DEPTH,
-  moveTime: 300,
-});
-const POSITION_CONFIRM_PROFILE = Object.freeze({
-  ...ANALYSIS_PROFILE,
-  depth: EVALUATION_DEPTH,
-  moveTime: 800,
-});
 
 function normalizeLevel(value) {
   const migratedValue = LEGACY_LEVELS[value] || value;
@@ -187,6 +172,10 @@ const state = {
   positionPrefetchPromise: null,
   positionPrefetchTimer: null,
   positionGenerationToken: 0,
+  session: null,
+  moveLog: [],
+  startingGame: false,
+  animationUntil: 0,
   currentGameId: null,
   currentGameFavorite: false,
   currentGameLabel: null,
@@ -205,212 +194,6 @@ const state = {
   positionBalanceCp: MIN_POSITION_BALANCE_CP,
 };
 
-class StockfishEngine {
-  constructor() {
-    const supportsWasm =
-      typeof WebAssembly === "object" &&
-      WebAssembly.validate(Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00));
-    this.workerSources = supportsWasm
-      ? ["./engines/stockfish-18-lite-single.js", "./engines/stockfish-18-asm.js"]
-      : ["./engines/stockfish-18-asm.js"];
-    this.worker = null;
-    this.queue = Promise.resolve();
-    this.currentTask = null;
-    this.options = {};
-    this.readySent = false;
-    this.generation = 0;
-    this.initPromise = this.initialize();
-  }
-
-  async initialize() {
-    let lastError = null;
-    for (const source of this.workerSources) {
-      try {
-        await this.startWorker(source);
-        return;
-      } catch (error) {
-        lastError = error;
-        this.worker?.terminate();
-        this.worker = null;
-      }
-    }
-    throw lastError || new Error(`No Stockfish ${STOCKFISH_VERSION} worker could be started.`);
-  }
-
-  startWorker(source) {
-    return new Promise((resolve, reject) => {
-      const worker = new Worker(new URL(source, import.meta.url));
-      let settled = false;
-      const timeoutId = window.setTimeout(() => {
-        fail(new Error(`Stockfish worker timed out while loading (${source}).`));
-      }, ENGINE_STARTUP_TIMEOUT_MS);
-      const cleanup = () => {
-        window.clearTimeout(timeoutId);
-        this.initResolver = null;
-      };
-      const fail = (error) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error instanceof Error ? error : new Error(`Stockfish worker failed to load (${source}).`));
-      };
-
-      this.worker = worker;
-      this.readySent = false;
-      this.options = {};
-      this.initResolver = () => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      };
-      worker.addEventListener("message", this.handleMessage.bind(this));
-      worker.addEventListener("error", (event) => fail(event.error || event), { once: true });
-      worker.addEventListener("messageerror", () => fail(new Error(`Stockfish worker message failed (${source}).`)), { once: true });
-      worker.postMessage("uci");
-    });
-  }
-
-  handleMessage(event) {
-    const line = String(event.data || "").trim();
-    if (!line) {
-      return;
-    }
-
-    const optionMatch = line.match(/^option name (.+?) type (\w+)(.*)$/);
-    if (optionMatch) {
-      const optionName = optionMatch[1].trim();
-      const optionDetails = optionMatch[3];
-      const minMatch = optionDetails.match(/\bmin (-?\d+)/);
-      const maxMatch = optionDetails.match(/\bmax (-?\d+)/);
-      this.options[optionName.toLowerCase()] = {
-        name: optionName,
-        type: optionMatch[2],
-        min: minMatch ? Number(minMatch[1]) : null,
-        max: maxMatch ? Number(maxMatch[1]) : null,
-      };
-      return;
-    }
-
-    if (!this.readySent && line === "uciok") {
-      this.readySent = true;
-      this.worker.postMessage("isready");
-      return;
-    }
-
-    if (this.initResolver && line === "readyok") {
-      const resolve = this.initResolver;
-      resolve();
-      return;
-    }
-
-    if (!this.currentTask) {
-      return;
-    }
-
-    const depthMatch = line.match(/\bdepth (\d+)/);
-    const scoreMatch = line.match(/\bscore (cp|mate) (-?\d+)/);
-    const multiPvMatch = line.match(/\bmultipv (\d+)/);
-    const pvMatch = line.match(/\bpv ([a-h][1-8][a-h][1-8][qrbn]?)/);
-    if (depthMatch && scoreMatch) {
-      const depth = Number(depthMatch[1]);
-      const multiPv = Number(multiPvMatch?.[1] || 1);
-      const score = {
-        type: scoreMatch[1],
-        value: Number(scoreMatch[2]),
-        depth,
-      };
-      if (depth >= this.currentTask.depth) {
-        this.currentTask.depth = depth;
-        if (multiPv === 1) {
-          this.currentTask.score = score;
-        }
-      }
-      if (pvMatch) {
-        this.currentTask.candidates.set(multiPv, {
-          move: pvMatch[1],
-          score,
-        });
-      }
-    }
-
-    if (line.startsWith("bestmove")) {
-      const match = line.match(/^bestmove (\S+)/);
-      const bestMove =
-        match && match[1] && match[1] !== "(none)" ? match[1] : null;
-      const selectedMove =
-        selectCandidateMove(
-          Array.from(this.currentTask.candidates.values()),
-          this.currentTask.config.candidateCount
-        ) || bestMove;
-      const resolve = this.currentTask.resolve;
-      const payload = {
-        bestMove: selectedMove,
-        candidates: Array.from(this.currentTask.candidates.values()),
-        score: this.currentTask.score,
-        config: this.currentTask.config,
-      };
-      this.currentTask = null;
-      resolve(payload);
-    }
-  }
-
-  ready() {
-    return this.initPromise;
-  }
-
-  cancelPending() {
-    this.generation += 1;
-    this.worker?.postMessage("stop");
-    if (this.currentTask) {
-      const task = this.currentTask;
-      this.currentTask = null;
-      task.resolve({ bestMove: null, score: null, config: task.config, cancelled: true });
-    }
-    this.queue = Promise.resolve();
-  }
-
-  search(fen, profile) {
-    const config = resolveEngineDifficulty(profile, this.options);
-    const generation = this.generation;
-    this.queue = this.queue.then(
-      () => {
-        if (generation !== this.generation || !this.worker) {
-          return { bestMove: null, score: null, config, cancelled: true };
-        }
-        return new Promise((resolve) => {
-          this.currentTask = {
-            depth: 0,
-            candidates: new Map(),
-            config,
-            generation,
-            resolve,
-            score: null,
-          };
-          this.worker.postMessage("stop");
-          this.worker.postMessage("ucinewgame");
-          if (this.options["skill level"]) {
-            this.worker.postMessage(`setoption name Skill Level value ${config.nativeSkill}`);
-          }
-          if (this.options["uci_limitstrength"]) {
-            this.worker.postMessage(
-              `setoption name UCI_LimitStrength value ${config.useLimitStrength}`
-            );
-          }
-          if (config.useLimitStrength && this.options["uci_elo"]) {
-            this.worker.postMessage(`setoption name UCI_Elo value ${config.elo}`);
-          }
-          if (this.options.multipv) {
-            this.worker.postMessage(`setoption name MultiPV value ${config.candidateCount}`);
-          }
-          this.worker.postMessage(`position fen ${fen}`);
-          this.worker.postMessage(`go depth ${config.depth} movetime ${config.moveTime}`);
-        });
-      }
-    );
-    return this.queue;
-  }
-}
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -450,69 +233,25 @@ function resultForWinner(winner) {
 }
 
 function gameResult() {
-  if (game.in_draw()) {
-    return { result: "draw", termination: "draw", resultCode: "1/2-1/2" };
-  }
-  if (game.in_checkmate()) {
-    const winner = game.turn() === "w" ? "b" : "w";
-    return { result: resultForWinner(winner), termination: "checkmate", resultCode: winner === "w" ? "1-0" : "0-1" };
-  }
-  return { result: null, termination: "in_progress", resultCode: "*" };
+  return detectResult(game, state.actualPlayerColor);
 }
 
-function buildPgn(startingFen, moves, resultCode = "*") {
-  const replay = new Chess(startingFen);
-  replay.header("Event", "Ultra Fischer", "SetUp", "1", "FEN", startingFen, "Result", resultCode);
-  for (const san of moves) {
-    if (!replay.move(san)) {
-      break;
-    }
-  }
-  return replay.pgn();
-}
+const moveRecord = new MoveRecordView(ui.moveHistory);
 
 async function saveCurrentGame(overrides = {}) {
-  if (!state.currentStartingFen) {
-    return null;
+  const session = state.session;
+  if (!session) return null;
+  const saved = await session.save(game, state.lastEvalScore, overrides, state.moveLog.map((move) => move.san));
+  if (session === state.session && saved) {
+    state.currentGameId = saved.id;
+    state.currentGameFavorite = session.record.isFavorite;
+    state.currentGameLabel = session.record.label;
   }
-  const now = Date.now();
-  const detected = gameResult();
-  const status = overrides.status || (overrides.result || detected.result ? "completed" : "in_progress");
-  const result = status === "completed" ? (overrides.result || detected.result) : null;
-  const termination = overrides.termination || (status === "terminated" ? "new_game" : detected.termination);
-  const resultCode = result === "draw" ? "1/2-1/2" : result === "win" ? (state.actualPlayerColor === "w" ? "1-0" : "0-1") : result === "loss" ? (state.actualPlayerColor === "w" ? "0-1" : "1-0") : "*";
-  const record = {
-    id: state.currentGameId,
-    label: state.currentGameLabel || `Game ${formatDate(state.currentStartedAt || now)}`,
-    startingFen: state.currentStartingFen,
-    currentFen: game.fen(),
-    playerColor: state.actualPlayerColor,
-    engineColor: state.actualPlayerColor === "w" ? "b" : "w",
-    stockfishLevel: Number(state.aiStrength),
-    status,
-    result,
-    termination,
-    moves: game.history(),
-    pgn: buildPgn(state.currentStartingFen, game.history(), resultCode),
-    isFavorite: state.currentGameFavorite,
-    startedAt: state.currentStartedAt || now,
-    updatedAt: now,
-    finishedAt: ["completed", "terminated"].includes(status) ? (state.currentFinishedAt || now) : null,
-    initialEvaluation: state.currentInitialEvaluation || null,
-    finalEvaluation: state.lastEvalScore || null,
-    moveCount: game.history().length,
-  };
-  const saved = state.currentGameId ? await updateGame(record) : await createGame(record);
-  state.currentGameId = saved.id;
-  state.currentStartedAt = saved.startedAt;
-  state.currentFinishedAt = saved.finishedAt;
-  state.currentGameFavorite = saved.isFavorite;
-  state.currentGameLabel = saved.label;
   return saved;
 }
 
 async function terminateCurrentGame() {
-  if (!state.currentGameId || !state.currentStartingFen || state.matchOver || game.game_over()) {
+  if (!state.session || state.session.record.status !== "in_progress" || state.matchOver || game.game_over()) {
     return null;
   }
   return saveCurrentGame({ status: "terminated", termination: "new_game" });
@@ -536,13 +275,20 @@ async function persistCurrentGameQuietly() {
 }
 
 async function createLocalGame(startingFen, score = null) {
+  await state.session?.detach();
   state.currentGameId = null;
   state.currentStartingFen = startingFen;
-  state.currentStartedAt = Date.now();
-  state.currentFinishedAt = null;
-  state.currentInitialEvaluation = score;
   state.currentGameFavorite = false;
-  state.currentGameLabel = `Game ${formatDate(state.currentStartedAt)}`;
+  state.moveLog = [];
+  const startedAt = Date.now();
+  state.currentGameLabel = `Game ${formatDate(startedAt)}`;
+  state.session = new GameSession({
+    label: state.currentGameLabel, startingFen, playerColor: state.actualPlayerColor,
+    engineColor: state.actualPlayerColor === "w" ? "b" : "w",
+    stockfishLevel: Number(state.aiStrength), mode: state.playerVsPlayer ? "pvp" : "pvai",
+    status: "in_progress", startedAt, isFavorite: false, initialEvaluation: score,
+  }, { create: createGame, update: saveGameProgress });
+  state.opponentEngine.newGame();
   await persistCurrentGameQuietly();
 }
 
@@ -687,16 +433,33 @@ function openSettingInfo(topic) {
 }
 
 function loadRecordIntoGame(record) {
-  if (!game.load(record.startingFen)) {
-    throw new Error("This saved game has an invalid starting position.");
-  }
-  for (const san of record.moves || []) {
-    if (!game.move(san)) {
-      throw new Error("This saved game contains an invalid move.");
+  const validated = replayGame(record.startingFen, record.moves || [], record.currentFen);
+  game.load(record.startingFen);
+  for (const move of validated.moves) game.move(move.san);
+  state.moveLog = validated.moves;
+}
+
+async function resumeRecord(record) {
+  if (state.startingGame) return;
+  try {
+    replayGame(record.startingFen, record.moves || [], record.currentFen);
+    ++state.taskToken;
+    cancelEngineSearches();
+    resetBoardInteraction();
+    if (state.session?.id === record.id) {
+      [ui.historyDialog, ui.favoritesDialog, ui.resumeDialog].forEach(closeOverlay);
+      await continuePlay();
+      return;
     }
-  }
-  if (record.currentFen && game.fen() !== record.currentFen) {
-    console.warn("Saved move history and current FEN differed; keeping the replayable move history.");
+    await terminateCurrentGame();
+    await state.session?.detach();
+    setCurrentRecord(record);
+    [ui.historyDialog, ui.favoritesDialog, ui.resumeDialog].forEach(closeOverlay);
+    await continuePlay();
+  } catch (error) {
+    console.error(error);
+    setBusy(false);
+    showToast("Could not resume this game: " + error.message);
   }
 }
 
@@ -715,11 +478,11 @@ function persistPositionPool() {
 
 function setCurrentRecord(record) {
   loadRecordIntoGame(record);
+  state.session = new GameSession(record, { create: createGame, update: saveGameProgress });
+  state.playerVsPlayer = record.mode === "pvp";
+  syncModeUI();
   state.currentGameId = record.id;
   state.currentStartingFen = record.startingFen;
-  state.currentStartedAt = record.startedAt;
-  state.currentFinishedAt = record.finishedAt;
-  state.currentInitialEvaluation = record.initialEvaluation || null;
   state.currentGameFavorite = Boolean(record.isFavorite);
   state.currentGameLabel = record.label || `Game ${formatDate(record.startedAt)}`;
   state.actualPlayerColor = record.playerColor;
@@ -732,7 +495,7 @@ function setCurrentRecord(record) {
   renderMoveHistory();
   updateEvalBar(record.finalEvaluation || record.initialEvaluation || null);
   syncActionAvailability();
-  setStatus(state.matchOver ? describeResult() : describeResult());
+  setStatus(describeResult());
 }
 
 function syncTheme() {
@@ -789,151 +552,19 @@ function syncHistoryPanel() {
   ui.historyToggle.setAttribute("aria-expanded", String(state.historyOpen));
 }
 
-function makeButton(label, action, id) {
-  const button = document.createElement("button");
-  button.className = "compact-button secondary";
-  button.type = "button";
-  button.textContent = label;
-  button.dataset.recordAction = action;
-  button.dataset.recordId = id;
-  return button;
-}
-
-function makeEditButton(action, id) {
-  const button = document.createElement("button");
-  button.className = "icon-button edit-record-button";
-  button.type = "button";
-  button.innerHTML = "&#9998;";
-  button.title = "Edit name";
-  button.setAttribute("aria-label", "Edit name");
-  button.dataset.recordAction = action;
-  button.dataset.recordId = id;
-  return button;
-}
-
-function makeFavoriteButton(record) {
-  const button = document.createElement("button");
-  button.className = "icon-button record-title-action favorite-button";
-  button.type = "button";
-  button.innerHTML = record.isFavorite ? "&#9733;" : "&#9734;";
-  button.title = record.isFavorite ? "Remove favorite" : "Favorite game";
-  button.setAttribute("aria-label", record.isFavorite ? "Remove favorite" : "Favorite game");
-  button.dataset.recordAction = "favorite";
-  button.dataset.recordId = record.id;
-  return button;
-}
-
-function appendRecordTitle(main, record) {
-  const titleRow = document.createElement("div");
-  titleRow.className = "record-item-title-row";
-  const title = document.createElement("strong");
-  title.className = "record-item-title";
-  title.textContent = record.label || `Game ${formatDate(record.startedAt)}`;
-  titleRow.append(title, makeEditButton("rename", record.id), makeFavoriteButton(record));
-  main.appendChild(titleRow);
-}
+const historyRecords = new RecordsView(ui.historyList);
+const favoriteRecords = new RecordsView(ui.favoritesList, { favorites: true });
 
 function resultCodeForRecord(record) {
-  return record.result === "draw" ? "1/2-1/2" : record.result === "win" ? (record.playerColor === "w" ? "1-0" : "0-1") : record.result === "loss" ? (record.playerColor === "w" ? "0-1" : "1-0") : "*";
+  return resultCode(record.result, record.playerColor);
 }
 
-function recordStatusLabel(record) {
-  if (record.status === "terminated") {
-    return "Terminated";
-  }
-  if (record.status === "completed") {
-    return record.result === "win" ? "Won" : record.result === "loss" ? "Lost" : "Draw";
-  }
-  return "In progress";
+function refreshHistoryList() {
+  return historyRecords.refresh(ui.historyFilter.value, ui.historySort.value);
 }
 
-function renderHistoryList(games) {
-  ui.historyList.innerHTML = "";
-  if (!games.length) {
-    const empty = document.createElement("p");
-    empty.className = "empty-state";
-    empty.textContent = "No games match this filter yet.";
-    ui.historyList.appendChild(empty);
-    return;
-  }
-  for (const record of games) {
-    const item = document.createElement("article");
-    item.className = "record-item";
-    const main = document.createElement("div");
-    main.className = "record-item-main";
-    appendRecordTitle(main, record);
-    const detail = document.createElement("span");
-    detail.className = "record-item-detail";
-    detail.textContent = `${sideName(record.playerColor)} vs Level ${record.stockfishLevel} · ${formatDate(record.updatedAt)} · ${record.moveCount || 0} moves`;
-    const meta = document.createElement("span");
-    meta.className = "record-item-meta";
-    meta.textContent = record.status === "terminated" && record.termination && record.termination !== "new_game"
-      ? `${recordStatusLabel(record)} · ${record.termination.replaceAll("_", " ")}`
-      : recordStatusLabel(record);
-    main.append(detail, meta);
-    const actions = document.createElement("div");
-    actions.className = "record-item-actions";
-    actions.appendChild(makeButton("Copy PGN", "copy-pgn", record.id));
-    if (record.status === "in_progress") actions.appendChild(makeButton("Resume", "resume", record.id));
-    actions.appendChild(makeButton("Replay", "replay", record.id));
-    actions.appendChild(makeButton("Play Again", "again", record.id));
-    actions.appendChild(makeButton("Delete", "delete", record.id));
-    item.append(main, actions);
-    ui.historyList.appendChild(item);
-  }
-}
-
-async function refreshHistoryList() {
-  try {
-    const filter = ui.historyFilter.value;
-    const games = await listGames({ favorite: filter === "favorite", sort: ui.historySort.value });
-    renderHistoryList(games.filter((record) => filter === "all" || filter === "favorite" || (filter === "in_progress" && record.status === "in_progress") || (filter === "terminated" && record.status === "terminated") || record.result === filter));
-  } catch (error) {
-    console.error(error);
-    ui.historyList.textContent = "Local game history is unavailable in this browser.";
-  }
-}
-
-function renderFavoritesList(games) {
-  ui.favoritesList.innerHTML = "";
-  if (!games.length) {
-    const empty = document.createElement("p");
-    empty.className = "empty-state";
-    empty.textContent = "No favorite games yet. Favorite a game from Game History to keep it here.";
-    ui.favoritesList.appendChild(empty);
-    return;
-  }
-  for (const record of games) {
-    const item = document.createElement("article");
-    item.className = "record-item";
-    const main = document.createElement("div");
-    main.className = "record-item-main";
-    appendRecordTitle(main, record);
-    const detail = document.createElement("span");
-    detail.className = "record-item-detail";
-    detail.textContent = `${sideName(record.playerColor)} vs Level ${record.stockfishLevel} · ${formatDate(record.updatedAt)} · ${record.moveCount || 0} moves`;
-    const meta = document.createElement("span");
-    meta.className = "record-item-meta";
-    meta.textContent = `${recordStatusLabel(record)} · PGN ready to copy`;
-    main.append(detail, meta);
-    const actions = document.createElement("div");
-    actions.className = "record-item-actions";
-    actions.appendChild(makeButton("Copy PGN", "copy-pgn", record.id));
-    if (record.status === "in_progress") actions.appendChild(makeButton("Resume", "resume", record.id));
-    actions.appendChild(makeButton("Replay", "replay", record.id));
-    actions.appendChild(makeButton("Play Again", "again", record.id));
-    item.append(main, actions);
-    ui.favoritesList.appendChild(item);
-  }
-}
-
-async function refreshFavoritesList() {
-  try {
-    renderFavoritesList(await listFavoriteGames());
-  } catch (error) {
-    console.error(error);
-    ui.favoritesList.textContent = "Favorite games are unavailable in this browser.";
-  }
+function refreshFavoritesList() {
+  return favoriteRecords.refresh();
 }
 
 async function refreshStatistics() {
@@ -953,7 +584,7 @@ async function refreshStatistics() {
   }
   ui.statisticsContent.appendChild(grid);
   const rate = document.createElement("p");
-  rate.textContent = `Win rate: ${stats.winRate}%`;
+  rate.textContent = `AI win rate: ${stats.winRate}%`;
   ui.statisticsContent.appendChild(rate);
   const table = document.createElement("div");
   table.className = "level-table";
@@ -1038,12 +669,15 @@ function renderReplay() {
 function openReplay(record) {
   state.replay = { ...state.replay, record, index: 0 };
   ui.replayMoves.innerHTML = "";
-  (record.moves || []).forEach((move, index) => {
+  let moveNumber = Number(record.startingFen.split(" ")[5]);
+  const verbose = replayGame(record.startingFen, record.moves || []).moves;
+  verbose.forEach((move, index) => {
     const button = document.createElement("button");
     button.className = "replay-move";
     button.type = "button";
     button.dataset.index = String(index + 1);
-    button.textContent = `${Math.floor(index / 2) + 1}${index % 2 ? "..." : "."} ${move}`;
+    button.textContent = `${moveNumber}${move.color === "b" ? "..." : "."} ${move.san}`;
+    if (move.color === "b") moveNumber += 1;
     button.addEventListener("click", () => { state.replay.index = index + 1; renderReplay(); });
     ui.replayMoves.appendChild(button);
   });
@@ -1067,6 +701,8 @@ function syncModeUI() {
 
 function setBusy(isBusy) {
   state.isBusy = isBusy;
+  if (isBusy) state.positionEngine?.cancelPending();
+  else schedulePositionPrefetch();
   syncActionAvailability();
   ui.startGame.disabled = isBusy;
   ui.colorButtons.forEach((button) => {
@@ -1076,9 +712,11 @@ function setBusy(isBusy) {
 
 function syncActionAvailability() {
   const terminal = state.matchOver || game.game_over();
-  const blocked = state.isBusy || terminal;
+  const blocked = state.isBusy || terminal || !state.engineReady || !state.session;
   ui.undo.disabled = blocked;
   ui.hintButton.disabled = blocked;
+  ui.resign.disabled = terminal || state.startingGame || !state.session || !state.engineReady;
+  ui.toggleMode.disabled = state.startingGame || !state.engineReady || terminal;
 }
 
 function terminalEvaluation(overrides = {}) {
@@ -1103,6 +741,8 @@ function cancelEngineSearches() {
 }
 
 async function finishMatch(message, overrides = {}) {
+  if (state.matchOver) return;
+  resetBoardInteraction();
   state.taskToken += 1;
   cancelEngineSearches();
   state.matchOver = true;
@@ -1170,55 +810,8 @@ function updateSideLabels() {
   ui.recordTurn.classList.toggle("is-black", game.turn() === "b");
 }
 
-function renderMoveCell(cell, move) {
-  if (!move) {
-    return;
-  }
-  const image = document.createElement("img");
-  image.className = "move-piece-icon";
-  image.src = `maingame/img/chesspieces/wikipedia/${move.color === "w" ? "w" : "b"}${move.piece.toUpperCase()}.png`;
-  image.alt = "";
-  image.setAttribute("aria-hidden", "true");
-  image.title = move.san;
-  const san = document.createElement("span");
-  san.textContent = move.san;
-  cell.append(image, san);
-}
-
 function renderMoveHistory() {
-  const moves = game.history({ verbose: true });
-  ui.moveHistory.innerHTML = "";
-
-  if (moves.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "history-empty";
-    empty.textContent = "No moves yet.";
-    ui.moveHistory.appendChild(empty);
-    return;
-  }
-
-  for (let i = 0; i < moves.length; i += 2) {
-    const row = document.createElement("div");
-    row.className = "history-row";
-
-    const number = document.createElement("span");
-    number.className = "move-number";
-    number.textContent = `${Math.floor(i / 2) + 1}.`;
-
-    const white = document.createElement("span");
-    white.className = "move-cell";
-    const black = document.createElement("span");
-    black.className = "move-cell";
-    renderMoveCell(white, moves[i]);
-    renderMoveCell(black, moves[i + 1]);
-
-    row.appendChild(number);
-    row.appendChild(white);
-    row.appendChild(black);
-    ui.moveHistory.appendChild(row);
-  }
-
-  ui.moveHistory.scrollTop = ui.moveHistory.scrollHeight;
+  moveRecord.render(state.moveLog, state.currentStartingFen || game.fen());
 }
 
 function normalizeScoreForWhite(score, turn) {
@@ -1237,6 +830,7 @@ function formatEvalLabel(score) {
     return "0.0";
   }
 
+  if (score.terminal) return score.type === "mate" ? (score.value > 0 ? "#1-0" : "#0-1") : "1/2";
   if (score.type === "mate") {
     return `M${score.value > 0 ? "+" : ""}${score.value}`;
   }
@@ -1250,6 +844,7 @@ function scoreToRatio(score) {
     return 0.5;
   }
 
+  if (score.terminal) return score.type === "mate" ? (score.value > 0 ? 1 : 0) : 0.5;
   if (score.type === "mate") {
     return score.value > 0 ? 0.97 : 0.03;
   }
@@ -1277,23 +872,21 @@ function updateEvalBar(score) {
 }
 
 async function refreshEvaluation(depth = EVALUATION_DEPTH) {
-  if (!state.evalVisible || !state.engineReady || state.matchOver || game.game_over()) {
-    return;
-  }
-
+  if (!state.evalVisible || !state.engineReady || state.matchOver || state.isBusy || game.game_over()) return;
   const token = state.taskToken;
-  const result = await state.analysisEngine.search(game.fen(), {
-    ...ANALYSIS_PROFILE,
-    depth,
-    moveTime: Math.max(700, Math.min(1400, depth * 70)),
-  });
-  if (token !== state.taskToken) {
-    return;
+  const fen = game.fen();
+  const turn = game.turn();
+  state.analysisEngine.cancelPending({ kind: "analysis" });
+  try {
+    const result = await state.analysisEngine.search(fen, {
+      ...ANALYSIS_PROFILE, depth, moveTime: Math.max(700, Math.min(1400, depth * 70)),
+    }, { kind: "analysis", priority: 20 });
+    if (token !== state.taskToken || result.cancelled || state.matchOver || game.fen() !== fen) return;
+    updateEvalBar(normalizeScoreForWhite(result.score, turn));
+  } catch (error) {
+    console.warn("Evaluation failed.", error);
+    if (token === state.taskToken) showToast("Analysis interrupted. The engine is restarting.");
   }
-  if (result.cancelled) {
-    return;
-  }
-  updateEvalBar(normalizeScoreForWhite(result.score, game.turn()));
 }
 
 function bestMoveToSan(moveString) {
@@ -1404,7 +997,7 @@ async function showHint() {
     ...ANALYSIS_PROFILE,
     depth: 12,
     moveTime: 550,
-  });
+  }, { kind: "hint", priority: 10 });
   if (token !== state.taskToken) {
     return;
   }
@@ -1442,22 +1035,29 @@ async function runComputerTurn(token) {
 
   const level = getLevelConfig(state.aiStrength);
   setStatus(`Stockfish Level ${state.aiStrength} is thinking...`);
-  const result = await state.opponentEngine.search(game.fen(), level);
+  const result = await state.opponentEngine.search(game.fen(), level, { kind: "opponent", priority: 0 });
   if (token !== state.taskToken || result.cancelled || state.playerVsPlayer || state.matchOver || game.game_over()) {
     return;
   }
 
   if (result.bestMove) {
+    await waitForBoardAnimation();
+    if (token !== state.taskToken || state.playerVsPlayer || state.matchOver) return;
     const move = {
       from: result.bestMove.slice(0, 2),
       to: result.bestMove.slice(2, 4),
       promotion: result.bestMove[4] || "q",
     };
-    game.move(move);
+    const applied = game.move(move);
+    if (!applied) throw new Error("Stockfish returned an illegal move.");
+    state.moveLog.push(applied);
+    state.animationUntil = performance.now() + (state.moveAnimation === "slide" ? 180 : 0);
     state.board.position(game.fen(), state.moveAnimation === "slide");
     renderMoveHistory();
     updateSideLabels();
     await persistCurrentGameQuietly();
+    await waitForBoardAnimation();
+    if (token !== state.taskToken) return;
   }
 
   if (game.game_over()) {
@@ -1465,294 +1065,27 @@ async function runComputerTurn(token) {
   } else {
     setStatus(describeResult());
   }
-  await refreshEvaluation();
-}
-
-function getRandomPosition(start, end, exclusions) {
-  const available = [];
-  for (let square = start; square < end; square += 1) {
-    if (!exclusions.includes(square)) {
-      available.push(square);
-    }
-  }
-  return available[Math.floor(Math.random() * available.length)];
-}
-
-function generatePosition(sideToMove) {
-  const board = Array.from(
-    "         \n         \n ........\n ........\n ........\n ........\n ........\n ........\n ........\n ........\n         \n         \n"
-  );
-  const exclusions = [];
-  const whitePieces = "PPPPPPPPRNBQKBNR";
-  const blackPieces = "pppppppprnbqkbnr";
-  const directions = {
-    N: -10,
-    E: 1,
-    S: 10,
-    W: -1,
-  };
-  const whiteDirections = {
-    P: [directions.N + directions.W, directions.N + directions.E],
-    N: [
-      directions.N + directions.N + directions.E,
-      directions.E + directions.N + directions.E,
-      directions.E + directions.S + directions.E,
-      directions.S + directions.S + directions.E,
-      directions.S + directions.S + directions.W,
-      directions.W + directions.S + directions.W,
-      directions.W + directions.N + directions.W,
-      directions.N + directions.N + directions.W,
-    ],
-    B: [
-      directions.N + directions.E,
-      directions.S + directions.E,
-      directions.S + directions.W,
-      directions.N + directions.W,
-    ],
-    R: [directions.N, directions.E, directions.S, directions.W],
-    Q: [
-      directions.N,
-      directions.E,
-      directions.S,
-      directions.W,
-      directions.N + directions.E,
-      directions.S + directions.E,
-      directions.S + directions.W,
-      directions.N + directions.W,
-    ],
-    K: [
-      directions.N,
-      directions.E,
-      directions.S,
-      directions.W,
-      directions.N + directions.E,
-      directions.S + directions.E,
-      directions.S + directions.W,
-      directions.N + directions.W,
-    ],
-  };
-  const blackDirections = {
-    p: [directions.S + directions.W, directions.S + directions.E],
-    n: whiteDirections.N,
-    b: whiteDirections.B,
-    r: whiteDirections.R,
-    q: whiteDirections.Q,
-    k: whiteDirections.K,
-  };
-
-  const edgeSquares = [
-    ...Array.from({ length: 20 }, (_, index) => index),
-    ...Array.from({ length: 20 }, (_, index) => index + 100),
-    ...Array.from({ length: 8 }, (_, index) => 20 + index * 10),
-    ...Array.from({ length: 8 }, (_, index) => 29 + index * 10),
-  ];
-  exclusions.push(...edgeSquares);
-
-  const setPieces = (pieces, ranges) => {
-    let bishopColor = null;
-    for (const piece of pieces) {
-      if (piece.toLowerCase() === "k") {
-        continue;
-      }
-      let position;
-      if (piece.toLowerCase() === "b") {
-        const candidates = getBishopPlacementCandidates(
-          bishopColor,
-          ranges,
-          exclusions
-        );
-        position = candidates[Math.floor(Math.random() * candidates.length)];
-        bishopColor = getSquareColor(position);
-      } else if (piece.toLowerCase() === "p") {
-        position = getRandomPosition(ranges.pawnStart, ranges.pawnEnd, exclusions);
-      } else {
-        position = getRandomPosition(ranges.otherStart, ranges.otherEnd, exclusions);
-      }
-      board[position] = piece;
-      exclusions.push(position);
-    }
-  };
-
-  const attackSquaresFor = (enemyDirections) => {
-    const attacked = [];
-    Object.keys(enemyDirections).forEach((piece) => {
-      board.forEach((square, position) => {
-        if (square !== piece) {
-          return;
-        }
-        enemyDirections[piece].forEach((direction) => {
-          let next = position + direction;
-          while (board[next] === ".") {
-            attacked.push(next);
-            if ("pnkPNK".includes(piece)) {
-              break;
-            }
-            next += direction;
-          }
-        });
-      });
-    });
-    return attacked;
-  };
-
-  const setKing = (king, enemyDirections, start, end) => {
-    const attackedSquares = attackSquaresFor(enemyDirections);
-    const position = getRandomPosition(start, end, exclusions.concat(attackedSquares));
-    board[position] = king;
-    exclusions.push(position);
-  };
-
-  setPieces(whitePieces, { pawnStart: 51, pawnEnd: 89, otherStart: 51, otherEnd: 99 });
-  setPieces(blackPieces, { pawnStart: 31, pawnEnd: 69, otherStart: 21, otherEnd: 69 });
-  setKing("K", blackDirections, 51, 99);
-  setKing("k", whiteDirections, 21, 69);
-
-  const rows = [];
-  for (let row = 2; row < 10; row += 1) {
-    let rowText = "";
-    for (let col = 1; col < 9; col += 1) {
-      rowText += board[10 * row + col];
-    }
-    rows.push(rowText);
-  }
-
-  const fenRows = rows.map((row) => {
-    let blanks = 0;
-    let fenRow = "";
-    for (const char of row) {
-      if (char === ".") {
-        blanks += 1;
-      } else {
-        if (blanks) {
-          fenRow += String(blanks);
-          blanks = 0;
-        }
-        fenRow += char;
-      }
-    }
-    if (blanks) {
-      fenRow += String(blanks);
-    }
-    return fenRow;
-  });
-
-  const fen = `${fenRows.join("/")} ${sideToMove} - - 0 1`;
-  if (
-    !areBishopsOnOppositeColors(fen, "w") ||
-    !areBishopsOnOppositeColors(fen, "b")
-  ) {
-    return generatePosition(sideToMove);
-  }
-  return fen;
+  void refreshEvaluation();
 }
 
 function getPositionSettingsKey() {
-  return `${state.positionBalanceCp}:${state.friendlyMode}`;
+  return positionSettingsKey(state.positionBalanceCp, state.friendlyMode);
 }
 
-function hasFriendlyMoveOptions(probe, result) {
-  if (probe.moves({ verbose: true }).length < POSITION_FRIENDLY_MIN_LEGAL_MOVES) {
-    return false;
-  }
-
-  const scores = (result.candidates || [])
-    .filter((candidate) => candidate.score?.type === "cp")
-    .map((candidate) => candidate.score.value);
-  if (scores.length < POSITION_FRIENDLY_MIN_ENGINE_MOVES) {
-    return false;
-  }
-
-  const bestScore = Math.max(...scores);
-  return scores.filter((score) => Math.abs(bestScore - score) <= POSITION_FRIENDLY_ENGINE_MOVE_MARGIN_CP).length >= POSITION_FRIENDLY_MIN_ENGINE_MOVES;
-}
-
-async function generateBalancedPosition(sideToMove, token, options = {}) {
-  const engine = options.engine || state.analysisEngine;
-  const acceptanceCp = normalizePositionBalance(options.acceptanceCp ?? state.positionBalanceCp);
-  const friendlyMode = options.friendlyMode ?? state.friendlyMode;
-  const settingsKey = options.settingsKey || getPositionSettingsKey();
-  const announce = options.announce !== false;
-  const isCancelled = options.isCancelled || (() => token !== state.taskToken || settingsKey !== getPositionSettingsKey());
-  const deadline = performance.now() + POSITION_GENERATION_TIMEOUT_MS;
-  let attempt = 0;
-
-  while (performance.now() < deadline) {
-    if (isCancelled()) {
-      return null;
-    }
-
-    const remainingBeforeSearch = deadline - performance.now();
-    if (remainingBeforeSearch < 220) {
-      break;
-    }
-
-    attempt += 1;
-    if (announce) {
-      setStatus(`Finding a balanced position... attempt ${attempt}`);
-    }
-    const fen = generatePosition(sideToMove);
-    const probe = new Chess();
-    if (!probe.load(fen)) {
-      continue;
-    }
-
-    const screenProfile = {
-      ...POSITION_SCREEN_PROFILE,
-      candidateCount: friendlyMode ? POSITION_FRIENDLY_CANDIDATE_COUNT : POSITION_SCREEN_PROFILE.candidateCount,
-      moveTime: Math.min(
-        POSITION_SCREEN_PROFILE.moveTime,
-        Math.max(120, Math.floor(remainingBeforeSearch - 80))
-      ),
-    };
-    const screenResult = await engine.search(fen, screenProfile);
-    if (isCancelled()) {
-      return null;
-    }
-    if (!screenResult.score || screenResult.score.type !== "cp") {
-      continue;
-    }
-
-    const screenScore = normalizeScoreForWhite(screenResult.score, probe.turn());
-    if (Math.abs(screenScore.value) > Math.max(POSITION_SCREEN_LIMIT_CP, acceptanceCp * 1.5)) {
-      continue;
-    }
-    if (friendlyMode && !hasFriendlyMoveOptions(probe, screenResult)) {
-      continue;
-    }
-
-    const remainingBeforeConfirmation = deadline - performance.now();
-    if (remainingBeforeConfirmation < 220) {
-      break;
-    }
-
-    const confirmResult = await engine.search(fen, {
-      ...POSITION_CONFIRM_PROFILE,
-      candidateCount: friendlyMode ? POSITION_FRIENDLY_CANDIDATE_COUNT : POSITION_CONFIRM_PROFILE.candidateCount,
-      moveTime: Math.min(
-        POSITION_CONFIRM_PROFILE.moveTime,
-        Math.max(120, Math.floor(remainingBeforeConfirmation - 80))
-      ),
-    });
-    if (isCancelled()) {
-      return null;
-    }
-
-    if (!confirmResult.score || confirmResult.score.type !== "cp") {
-      continue;
-    }
-
-    const normalized = normalizeScoreForWhite(confirmResult.score, probe.turn());
-    const distance = Math.abs(normalized.value);
-    if (distance <= acceptanceCp && (!friendlyMode || hasFriendlyMoveOptions(probe, confirmResult))) {
-      return { fen, score: normalized };
-    }
-  }
-
-  return null;
+function generateBalancedPosition(sideToMove, token, options = {}) {
+  return findBalancedPosition(sideToMove, {
+    engine: state.opponentEngine, acceptanceCp: state.positionBalanceCp,
+    friendlyMode: state.friendlyMode, timeoutMs: POSITION_GENERATION_TIMEOUT_MS,
+    isCancelled: () => token !== state.taskToken,
+    announce: (attempts) => setStatus(`Searching for a balanced position... ${attempts}`),
+    ...options,
+    ...(options.announce === false ? { announce: () => {} } : {}),
+  });
 }
 
 function takeCachedPosition(sideToMove) {
   const settingsKey = getPositionSettingsKey();
+  state.positionPool = state.positionPool.filter((candidate) => cachedPositionAccepted(candidate, state.positionBalanceCp, state.friendlyMode));
   const index = state.positionPool.findIndex((candidate) => candidate.sideToMove === sideToMove && candidate.settingsKey === settingsKey);
   if (index < 0) {
     return null;
@@ -1789,10 +1122,10 @@ async function prefetchPosition(sideToMove, settingsKey, token) {
     announce: false,
     engine,
     friendlyMode: state.friendlyMode,
-    isCancelled: () => token !== state.positionGenerationToken || settingsKey !== getPositionSettingsKey(),
+    isCancelled: () => token !== state.positionGenerationToken || settingsKey !== getPositionSettingsKey() || state.isBusy || document.hidden,
     settingsKey,
   });
-  if (!candidate || token !== state.positionGenerationToken || settingsKey !== getPositionSettingsKey()) {
+  if (!candidate || token !== state.positionGenerationToken || settingsKey !== getPositionSettingsKey() || state.isBusy || document.hidden) {
     return;
   }
   if (!state.positionPool.some((item) => item.sideToMove === sideToMove && item.settingsKey === settingsKey)) {
@@ -1802,7 +1135,7 @@ async function prefetchPosition(sideToMove, settingsKey, token) {
 }
 
 function prefetchPositions() {
-  if (!state.engineReady || state.positionPrefetchPromise) {
+  if (!state.engineReady || state.isBusy || document.hidden || state.positionPrefetchPromise) {
     return;
   }
 
@@ -1843,29 +1176,19 @@ function schedulePositionPrefetch() {
 }
 
 async function startNewGame() {
-  if (!state.engineReady) {
-    return;
-  }
+  if (state.startingGame) return;
 
+  state.startingGame = true;
+  resetBoardInteraction();
   const token = ++state.taskToken;
   cancelEngineSearches();
   setBusy(true);
   updateEvalBar(null);
 
-  const actualColor = state.pendingStartFen
-    ? state.requestedColor === "random"
-      ? Math.random() < 0.5
-        ? "w"
-        : "b"
-      : state.requestedColor
-    : state.requestedColor === "random"
-      ? Math.random() < 0.5
-        ? "w"
-        : "b"
-      : state.requestedColor;
+  const actualColor = state.requestedColor === "random"
+    ? (Math.random() < 0.5 ? "w" : "b")
+    : state.requestedColor;
 
-  state.actualPlayerColor = actualColor;
-  state.board.orientation(actualColor === "w" ? "white" : "black");
   const cachedCandidate = state.pendingStartFen ? null : takeCachedPosition(actualColor);
   setStatus(state.pendingStartFen
     ? "Loading favorite game..."
@@ -1875,7 +1198,16 @@ async function startNewGame() {
   let gameStarted = false;
 
   try {
+    if (!state.engineReady) {
+      setStatus("Retrying Stockfish initialization...");
+      state.opponentEngine?.dispose();
+      state.opponentEngine = new StockfishEngine();
+      await state.opponentEngine.ready();
+      state.analysisEngine = state.opponentEngine;
+      state.engineReady = true;
+    }
     await terminateCurrentGame();
+    if (state.session) state.matchOver = true;
     if (token !== state.taskToken) {
       return;
     }
@@ -1889,6 +1221,8 @@ async function startNewGame() {
       return;
     }
 
+    state.actualPlayerColor = actualColor;
+    state.board.orientation(actualColor === "w" ? "white" : "black");
     state.matchOver = false;
     game.load(candidate.fen);
     state.pendingStartFen = null;
@@ -1906,7 +1240,12 @@ async function startNewGame() {
         void refreshEvaluation();
       }
     }, 900);
+  } catch (error) {
+    console.error(error);
+    setStatus("Position search interrupted. Try New Game again.");
+    showToast(error.message);
   } finally {
+    state.startingGame = false;
     if (token === state.taskToken) {
       setBusy(false);
       if (gameStarted) {
@@ -1914,13 +1253,26 @@ async function startNewGame() {
       }
     }
   }
+  if (gameStarted && token === state.taskToken) await continuePlay();
 }
 
 function resignGame() {
-  state.taskToken += 1;
-  const winnerColor = game.turn() === "w" ? "b" : "w";
-  const winner = sideName(winnerColor);
-  void finishMatch(`${winner} wins by resignation.`, { result: resultForWinner(winnerColor), termination: "resignation" });
+  if (!state.session || state.matchOver || game.game_over() || state.startingGame) return;
+  const loser = state.playerVsPlayer ? game.turn() : state.actualPlayerColor;
+  const winnerColor = loser === "w" ? "b" : "w";
+  void finishMatch(`${sideName(winnerColor)} wins by resignation.`, { result: resultForWinner(winnerColor), termination: "resignation" });
+}
+
+function resetBoardInteraction() {
+  state.selectedSquare = null;
+  state.suppressClickUntil = 0;
+  closePromotionDialog();
+  clearBoardHighlights();
+}
+
+function waitForBoardAnimation() {
+  const remaining = state.animationUntil - performance.now();
+  return remaining > 0 ? new Promise((resolve) => window.setTimeout(resolve, remaining)) : Promise.resolve();
 }
 
 function clearBoardHighlights() {
@@ -2010,7 +1362,7 @@ function greySquare(square) {
 
 function canSelectSquare(square) {
   const piece = game.get(square);
-  if (!piece || state.isBusy || state.matchOver || game.game_over()) {
+  if (!piece || !state.session || !state.engineReady || state.isBusy || state.matchOver || game.game_over()) {
     return false;
   }
   return piece.color === game.turn() && (state.playerVsPlayer || piece.color === state.actualPlayerColor);
@@ -2027,10 +1379,14 @@ function showLegalMoves(square) {
 }
 
 function commitMove(source, target, renderImmediately = false, promotion = "q") {
+  if (!state.session || !state.engineReady || state.isBusy || state.matchOver || game.game_over() || (!state.playerVsPlayer && game.turn() !== state.actualPlayerColor)) return null;
   const move = game.move({ from: source, to: target, promotion });
   if (!move) {
     return null;
   }
+  state.moveLog.push(move);
+  state.animationUntil = performance.now() + (state.moveAnimation === "slide" ? (renderImmediately ? 180 : 140) : 0);
+  cancelEngineSearches();
   state.selectedSquare = null;
   clearBoardHighlights();
   state.suppressClickUntil = Date.now() + 250;
@@ -2054,7 +1410,7 @@ function attemptMove(source, target, renderImmediately = false) {
 }
 
 function handleSquareClick(square) {
-  if (Date.now() < state.suppressClickUntil) {
+  if (state.isBusy || state.matchOver || game.game_over() || Date.now() < state.suppressClickUntil) {
     return;
   }
   if (!state.selectedSquare) {
@@ -2083,38 +1439,47 @@ function handleSquareClick(square) {
 }
 
 async function afterMove() {
+  const token = state.taskToken;
+  if (!state.playerVsPlayer && game.turn() !== state.actualPlayerColor && !game.game_over()) setBusy(true);
   updateSideLabels();
   renderMoveHistory();
   await persistCurrentGameQuietly();
-
+  if (token !== state.taskToken) return;
   if (game.game_over()) {
     await finishMatch(describeResult());
-    await refreshEvaluation();
     return;
   }
+  await continuePlay();
+}
 
-  if (!state.playerVsPlayer && game.turn() !== state.actualPlayerColor) {
-    const token = state.taskToken;
-    setBusy(true);
-    try {
-      await runComputerTurn(token);
-    } finally {
-      if (token === state.taskToken) {
-        setBusy(false);
-      }
+async function continuePlay() {
+  const token = state.taskToken;
+  const botTurn = !state.playerVsPlayer && !state.matchOver && !game.game_over() && game.turn() !== state.actualPlayerColor;
+  if (!botTurn) {
+    setBusy(false);
+    setStatus(describeResult());
+    void refreshEvaluation();
+    return;
+  }
+  setBusy(true);
+  try {
+    await runComputerTurn(token);
+  } catch (error) {
+    console.error(error);
+    if (token === state.taskToken) setStatus("Engine interrupted. Switch to PvP or retry with New Game.");
+  } finally {
+    if (token === state.taskToken) {
+      setBusy(false);
+      void refreshEvaluation();
     }
-    return;
   }
-
-  setStatus(describeResult());
-  await refreshEvaluation();
 }
 
 function createBoard() {
   const config = {
     draggable: true,
     onDragStart(source, piece) {
-      if (state.isBusy || state.matchOver || game.game_over()) {
+      if (!state.session || !state.engineReady || state.isBusy || state.matchOver || game.game_over()) {
         return false;
       }
       if (piece[0] !== game.turn()) {
@@ -2155,6 +1520,7 @@ function createBoard() {
       state.board.position(game.fen(), false);
     },
     dragThrottleRate: 8,
+    dragStartDistance: 5,
     moveSpeed: state.moveAnimation === "slide" ? 180 : 0,
     snapSpeed: state.moveAnimation === "slide" ? 140 : 0,
     snapbackSpeed: state.moveAnimation === "slide" ? 140 : 0,
@@ -2218,7 +1584,94 @@ function closeSetup() {
   syncSetupPanel();
 }
 
+async function handleRecordAction(event, container) {
+  const button = event.target.closest("[data-record-action]");
+  if (!button) return;
+  const record = await getGame(button.dataset.recordId);
+  if (!record) return;
+  const action = button.dataset.recordAction;
+  if (action === "copy-pgn") {
+    await copyPgn(buildPgn(record.startingFen, record.moves || [], resultCodeForRecord(record)));
+    return;
+  }
+  if (action === "replay") {
+    closeOverlay(container === ui.historyList ? ui.historyDialog : ui.favoritesDialog);
+    openReplay(record);
+    return;
+  }
+  if (action === "again") {
+    preparePlayAgain(record.startingFen, record.playerColor, record.stockfishLevel);
+    return;
+  }
+  if (action === "resume") { await resumeRecord(record); return; }
+  if (action === "rename") {
+    const label = window.prompt("Name this game", record.label || `Game ${formatDate(record.startedAt)}`);
+    if (!label?.trim()) return;
+    const renamed = await renameGame(record.id, label);
+    if (record.id === state.currentGameId && renamed) {
+      state.currentGameLabel = renamed.label;
+      state.session?.patchMetadata({ label: renamed.label });
+    }
+  } else if (action === "favorite") {
+    await setGameFavorite(record.id, !record.isFavorite);
+    if (record.id === state.currentGameId) {
+      state.currentGameFavorite = !record.isFavorite;
+      state.session?.patchMetadata({ isFavorite: !record.isFavorite });
+    }
+  } else if (action === "delete") {
+    if (!window.confirm("Delete this local game record?")) return;
+    if (record.id === state.currentGameId) await state.session?.detach();
+    await deleteGame(record.id);
+  } else return;
+  await refreshHistoryList();
+  await refreshFavoritesList();
+}
+
+async function importSelectedBackup() {
+  const file = ui.importFile.files?.[0];
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) { showToast("Backup is larger than 5 MB."); ui.importFile.value = ""; return; }
+  const session = state.session;
+  const recording = session?.recording;
+  let imported = false;
+  try {
+    const backup = JSON.parse(await file.text());
+    validateBackup(backup);
+    const replace = window.confirm("Press OK to replace local data, or Cancel to merge this backup.");
+    if (session) session.recording = false;
+    await session?.queue;
+    await importBackup(backup, replace ? "replace" : "merge");
+    imported = true;
+    applyPreferences(await getPreferences());
+    showToast("Backup imported.");
+    await refreshStorageSummary();
+    await refreshHistoryList();
+    await refreshFavoritesList();
+  } catch (error) {
+    if (session && !imported) session.recording = recording;
+    console.error(error);
+    showToast(error.message || "Could not import backup.");
+  } finally {
+    ui.importFile.value = "";
+  }
+}
+
+function applyPreferences(preferences) {
+  const previousAnimation = state.moveAnimation;
+  invalidatePositionPool();
+  Object.assign(state, preferences);
+  syncTheme();
+  syncEvalVisibility();
+  syncColorButtons();
+  syncSettingsUI();
+  if (previousAnimation !== state.moveAnimation) rebuildBoard();
+}
+
 function bindEvents() {
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) state.positionEngine?.cancelPending();
+    else schedulePositionPrefetch();
+  });
   ui.newGame.addEventListener("click", () => {
     closeOverlay(ui.resultDialog);
     state.pendingStartFen = null;
@@ -2247,11 +1700,11 @@ function bindEvents() {
       return;
     }
     cancelEngineSearches();
+    resetBoardInteraction();
     const movesToUndo = state.playerVsPlayer ? 1 : 2;
     for (let count = 0; count < movesToUndo; count += 1) {
-      if (!game.undo()) {
-        break;
-      }
+      if (!game.undo()) break;
+      state.moveLog.pop();
     }
     state.board.position(game.fen(), false);
     state.taskToken += 1;
@@ -2273,7 +1726,7 @@ function bindEvents() {
   });
 
   ui.hintButton.addEventListener("click", () => {
-    void showHint();
+    void showHint().catch((error) => { console.error(error); showToast("Hint interrupted. Try again."); setStatus(describeResult()); });
   });
 
   ui.historyToggle.addEventListener("click", () => {
@@ -2287,12 +1740,17 @@ function bindEvents() {
   });
 
   ui.toggleMode.addEventListener("click", async () => {
+    if (state.startingGame || state.matchOver || game.game_over()) return;
     state.playerVsPlayer = !state.playerVsPlayer;
     state.taskToken += 1;
+    cancelEngineSearches();
+    resetBoardInteraction();
+    setBusy(false);
+    state.session?.patchMetadata({ mode: state.playerVsPlayer ? "pvp" : "pvai" });
     syncModeUI();
     syncSettingsUI();
-    setStatus(describeResult());
-    await refreshEvaluation();
+    await persistCurrentGameQuietly();
+    await continuePlay();
   });
 
   ui.themeSelect.addEventListener("change", () => {
@@ -2350,93 +1808,16 @@ function bindEvents() {
     if (event.target === ui.settingInfoDialog) closeOverlay(ui.settingInfoDialog);
   });
   [ui.historyFilter, ui.historySort].forEach((control) => control.addEventListener("change", () => void refreshHistoryList()));
-  ui.historyList.addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-record-action]");
-    if (!button) return;
-    const record = (await listGames()).find((item) => item.id === button.dataset.recordId);
-    if (!record) return;
-    const action = button.dataset.recordAction;
-    if (action === "rename") {
-      const label = window.prompt("Name this game", record.label || `Game ${formatDate(record.startedAt)}`);
-      if (label?.trim()) {
-        const renamed = await renameGame(record.id, label);
-        if (record.id === state.currentGameId && renamed) state.currentGameLabel = renamed.label;
-      }
-      await refreshHistoryList();
-      await refreshFavoritesList();
-      return;
-    }
-    if (action === "favorite") {
-      await setGameFavorite(record.id, !record.isFavorite);
-      if (record.id === state.currentGameId) state.currentGameFavorite = !record.isFavorite;
-      await refreshFavoritesList();
-    }
-    if (action === "copy-pgn") {
-      await copyPgn(record.pgn || buildPgn(record.startingFen, record.moves || [], resultCodeForRecord(record)));
-      return;
-    }
-    if (action === "delete" && window.confirm("Delete this local game record?")) {
-      await deleteGame(record.id);
-      await refreshFavoritesList();
-    }
-    if (action === "replay") { closeOverlay(ui.historyDialog); openReplay(record); return; }
-    if (action === "again") { preparePlayAgain(record.startingFen, record.playerColor, record.stockfishLevel); return; }
-    if (action === "resume") {
-      try { setCurrentRecord(record); closeOverlay(ui.historyDialog); if (!state.matchOver && !state.playerVsPlayer && game.turn() !== state.actualPlayerColor) { setBusy(true); await runComputerTurn(++state.taskToken); setBusy(false); } } catch (error) { console.error(error); showToast("Could not resume this game."); }
-      return;
-    }
-    await refreshHistoryList();
-  });
-  ui.favoritesList.addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-record-action]");
-    if (!button) return;
-    const record = (await listFavoriteGames()).find((item) => item.id === button.dataset.recordId);
-    if (!record) return;
-    const action = button.dataset.recordAction;
-    if (action === "rename") {
-      const label = window.prompt("Name this favorite game", record.label);
-      if (label?.trim()) {
-        const renamed = await renameGame(record.id, label);
-        if (record.id === state.currentGameId && renamed) state.currentGameLabel = renamed.label;
-      }
-      await refreshFavoritesList();
-      return;
-    }
-    if (action === "copy-pgn") {
-      await copyPgn(record.pgn || buildPgn(record.startingFen, record.moves || [], resultCodeForRecord(record)));
-      return;
-    }
-    if (action === "favorite") {
-      await setGameFavorite(record.id, false);
-      await refreshFavoritesList();
-      await refreshHistoryList();
-      return;
-    }
-    if (action === "replay") {
-      closeOverlay(ui.favoritesDialog);
-      openReplay(record);
-      return;
-    }
-    if (action === "again") {
-      preparePlayAgain(record.startingFen, record.playerColor, record.stockfishLevel);
-      return;
-    }
-    if (action === "resume") {
-      try {
-        setCurrentRecord(record);
-        closeOverlay(ui.favoritesDialog);
-        if (!state.matchOver && !state.playerVsPlayer && game.turn() !== state.actualPlayerColor) {
-          setBusy(true);
-          await runComputerTurn(++state.taskToken);
-          setBusy(false);
-        }
-      } catch (error) {
+  [ui.historyList, ui.favoritesList].forEach((container) => {
+    container.addEventListener("click", (event) => {
+      void handleRecordAction(event, container).catch((error) => {
         console.error(error);
-        showToast("Could not resume this game.");
-      }
-    }
+        showToast(error.message || "The archive action failed.");
+      });
+    });
   });
-  ui.resumeGame.addEventListener("click", async () => { if (!state.resumeRecord) return; try { setCurrentRecord(state.resumeRecord); closeOverlay(ui.resumeDialog); if (!state.matchOver && !state.playerVsPlayer && game.turn() !== state.actualPlayerColor) { setBusy(true); await runComputerTurn(++state.taskToken); setBusy(false); } } catch (error) { console.error(error); showToast("Could not resume this game."); } });
+  ui.resumeGame.addEventListener("click", async () => { if (state.resumeRecord) await resumeRecord(state.resumeRecord); });
+
   ui.resumeNewGame.addEventListener("click", async () => {
     const record = state.resumeRecord;
     closeOverlay(ui.resumeDialog);
@@ -2464,11 +1845,11 @@ function bindEvents() {
   ui.replayLast.addEventListener("click", () => { state.replay.index = state.replay.record?.moves?.length || 0; renderReplay(); });
   ui.exportData.addEventListener("click", async () => { try { const backup = await exportBackup(); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" })); link.download = `Ultra-Fischer-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); showToast("Backup exported."); } catch (error) { console.error(error); showToast("Could not export local data."); } });
   ui.importData.addEventListener("click", () => ui.importFile.click());
-  ui.importFile.addEventListener("change", async () => { const file = ui.importFile.files?.[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) { showToast("Backup is larger than 5 MB."); return; } try { const backup = JSON.parse(await file.text()); const replace = window.confirm("Press OK to replace local data, or Cancel to merge this backup."); await importBackup(backup, replace ? "replace" : "merge"); showToast("Backup imported."); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); } catch (error) { console.error(error); showToast(error.message || "Could not import backup."); } finally { ui.importFile.value = ""; } });
-  ui.clearHistory.addEventListener("click", async () => { if (window.confirm("Clear all local game history?")) { await clearGames(); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); showToast("Game history cleared."); } });
-  ui.clearFavorites.addEventListener("click", async () => { if (window.confirm("Remove all games from Favorite Games?")) { await clearGameFavorites(); await refreshStorageSummary(); await refreshFavoritesList(); await refreshHistoryList(); showToast("Favorite games cleared."); } });
-  ui.resetPreferences.addEventListener("click", async () => { if (window.confirm("Reset local preferences?")) { const previousAnimation = state.moveAnimation; const preferences = await resetPreferences(); invalidatePositionPool(); Object.assign(state, preferences); syncTheme(); syncEvalVisibility(); syncColorButtons(); syncSettingsUI(); if (previousAnimation !== state.moveAnimation) rebuildBoard(); await persistPreferences(); showToast("Preferences reset."); } });
-  ui.deleteAllData.addEventListener("click", async () => { if (window.prompt("Type DELETE to remove all local games, favorite games, and preferences.") === "DELETE") { await deleteAllData(); showToast("All local data deleted."); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); } });
+  ui.importFile.addEventListener("change", () => void importSelectedBackup());
+  ui.clearHistory.addEventListener("click", async () => { if (window.confirm("Clear all local game history?")) { await state.session?.detach(); await clearGames(); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); showToast("Game history cleared."); } });
+  ui.clearFavorites.addEventListener("click", async () => { if (window.confirm("Remove all games from Favorite Games?")) { await clearGameFavorites(); state.currentGameFavorite = false; state.session?.patchMetadata({ isFavorite: false }); await refreshStorageSummary(); await refreshFavoritesList(); await refreshHistoryList(); showToast("Favorite games cleared."); } });
+  ui.resetPreferences.addEventListener("click", async () => { if (window.confirm("Reset local preferences?")) { applyPreferences(await resetPreferences()); await persistPreferences(); showToast("Preferences reset."); } });
+  ui.deleteAllData.addEventListener("click", async () => { if (window.prompt("Type DELETE to remove all local games, favorite games, and preferences.") === "DELETE") { await state.session?.detach(); await deleteAllData(); showToast("All local data deleted."); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); } });
 
   ui.settingsClose.addEventListener("click", closeSettings);
 
@@ -2612,7 +1993,7 @@ async function init() {
     setBusy(false);
     setStatus("Engine ready.");
     try {
-      const unfinished = await listGames({ status: "in_progress", sort: "newest" });
+      const { items: unfinished } = await listGamesPage({ filter: "in_progress", limit: 1 });
       if (unfinished[0]) {
         state.resumeRecord = unfinished[0];
         ui.resumeDetail.textContent = `${sideName(unfinished[0].playerColor)} vs Stockfish Level ${unfinished[0].stockfishLevel} · ${unfinished[0].moveCount || 0} moves · updated ${formatDate(unfinished[0].updatedAt)}`;
@@ -2627,7 +2008,8 @@ async function init() {
     }
   } catch (error) {
     console.error(error);
-    setStatus("Engine failed to load.");
+    setBusy(false);
+    setStatus("Engine failed to load. New Game retries initialization.");
   }
 }
 

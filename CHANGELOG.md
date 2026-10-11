@@ -1,6 +1,41 @@
 # Changelog
 
-All notable Ultra Fischer changes currently present in this repository are recorded here. Entries are reconstructed from the Git history and include the commit that introduced each change.
+All notable Ultra Fischer changes currently present in this repository are recorded here. Legacy entries are reconstructed from Git history; the latest entry records the implementation and verification directly.
+
+## 2026-10-11
+
+### Engine reliability and position accuracy
+
+- Permit WASM compilation in the production CSP without allowing general JavaScript eval.
+- Extract the worker/UCI transport into its own module. Drain cancelled searches before starting the next task, isolate replies from old workers, and restart after runtime errors, hung searches, or missing stop responses.
+- Prioritize opponent turns over hints and evaluation; retain the transposition table between searches and reset it only for a new match.
+- Make New Game retry failed engine initialization, and prevent the unverified startup-preview board from accepting moves.
+- Require actual depth-12 screening and depth-16 confirmation. Ignore bound estimates, reject incomplete searches, and require legal, distinct Friendly Mode alternatives at the same depth within the selected balance limit.
+- Screen one principal variation first, then confirm two for Friendly Mode, reducing unnecessary search work while retaining the strict acceptance rules.
+- Version cached-position keys and revalidate cached FENs, bishops, balance scores, and alternatives before use.
+- Bound raw-position retries and retain the 15-second search budget without accepting a weaker position on timeout.
+- Correct mate candidate ordering and preserve Stockfish's native weakened best move when no candidate sampling is requested.
+
+### Match lifecycle, records, and rendering
+
+- Extract match persistence and chess validation/replay into shared modules. Serialize saves and lock completed/terminated outcomes.
+- Cancel AI work and clear busy state when switching modes; preserve PvP mode on resume.
+- Correct resignation during an opponent turn, disable finished-game actions, and reflect checkmate/resignation with terminal evaluation labels and a fully won/lost bar.
+- Terminate the old match before assigning the next game's player color. Preserve active-record name/favorite edits and prevent cleared/deleted records from being resurrected by autosaves.
+- Exclude PvP from AI statistics and identify local opponents correctly in the archive.
+- Render black-starting moves in the black column, with correct fullmove numbers in both the live record and replay.
+- Extract record views, add indexed 50-record pagination, and update live move rows incrementally.
+- Separate clicks from drags, wait for board motion before applying fast AI replies, cancel obsolete animations, and release board handlers/timers/transient pieces on destruction.
+- Validate backups by replaying SAN and checking the final FEN. Reject malformed records before any replacement and import all game/legacy-position records in one rollback-safe transaction.
+- Preserve legacy saved positions in exports and apply imported preferences without allowing the previously active game to overwrite imported records.
+- Correct About wording on finite-depth estimates, draw rules, minimum reached depths, and retry behavior.
+- Keep the mobile evaluation readout and toggle inside the reserved bar row so they do not overlap the mode controls or clip off-screen.
+
+### Verification and development
+
+- Add engine, lifecycle, position-policy, storage-failure, and mate-ordering unit regressions.
+- Add browser coverage for real WASM startup under production CSP, engine interruption, mode switching, resignation/checkmate, move columns/images, favorites, next-game metadata, board cleanup, dragging, promotion, animation, backup rejection, paginated history, PGN clipboard export, and desktop/mobile layout stability.
+- Add a local server using production headers, a reproducible development lockfile, syntax checks for all application modules, and GitHub Actions for unit/browser checks.
 
 ## 2026-09-07
 

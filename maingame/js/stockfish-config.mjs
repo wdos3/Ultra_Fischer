@@ -77,7 +77,7 @@ function resolveEngineDifficulty(profile, options = {}) {
 function selectCandidateMove(candidates, candidateCount) {
   const ranked = candidates
     .filter((candidate) => candidate?.move)
-    .sort((first, second) => (second.score?.value || 0) - (first.score?.value || 0))
+    .sort((first, second) => candidateValue(second.score) - candidateValue(first.score))
     .slice(0, Math.max(1, candidateCount));
 
   if (ranked.length === 0) {
@@ -99,6 +99,11 @@ function selectCandidateMove(candidates, candidateCount) {
   }
 
   return ranked[0].move;
+}
+
+function candidateValue(score) {
+  if (score?.type !== "mate") return score?.value || 0;
+  return score.value > 0 ? 100000 - score.value : -100000 - score.value;
 }
 
 export {

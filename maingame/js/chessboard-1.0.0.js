@@ -73,7 +73,7 @@
       f.apply(scope, args)
     }
 
-    return function (_args) {
+    var throttled = function (_args) {
       args = arguments
       if (!timeout) {
         fire()
@@ -81,6 +81,12 @@
         shouldFire = true
       }
     }
+    throttled.cancel = function () {
+      window.clearTimeout(timeout)
+      timeout = 0
+      shouldFire = false
+    }
+    return throttled
   }
 
   // function debounce (f, interval, scope) {
@@ -664,6 +670,10 @@
 
     // constructor return object
     var widget = {}
+    var eventNamespace = '.chessboard-' + uuid()
+    var destroyed = false
+    var animationFrames = new Set()
+    var animatedPieces = new Set()
 
     // -------------------------------------------------------------------------
     // Stateful
@@ -676,6 +686,7 @@
     var draggedPieceLocation = null
     var draggedPieceSource = null
     var isDragging = false
+    var pendingDrag = null
     var sparePiecesElsIds = {}
     var squareElsIds = {}
     var squareElsOffsets = {}
@@ -905,9 +916,29 @@
     // Animations
     // -------------------------------------------------------------------------
 
-    var requestFrame = window.requestAnimationFrame
-      ? function (callback) { return window.requestAnimationFrame(callback) }
-      : function (callback) { return window.setTimeout(function () { callback(Date.now()) }, 1000 / 60) }
+    function requestFrame (callback) {
+      var id
+      function invoke (timestamp) {
+        animationFrames.delete(id)
+        if (!destroyed) callback(timestamp)
+      }
+      id = window.requestAnimationFrame
+        ? window.requestAnimationFrame(invoke)
+        : window.setTimeout(function () { invoke(Date.now()) }, 1000 / 60)
+      animationFrames.add(id)
+      return id
+    }
+
+    function cancelAnimations () {
+      animationFrames.forEach(function (id) {
+        if (window.cancelAnimationFrame) window.cancelAnimationFrame(id)
+        else window.clearTimeout(id)
+      })
+      animationFrames.clear()
+      animatedPieces.forEach(function (id) { $('#' + id).remove() })
+      animatedPieces.clear()
+      $container.find('*').stop(true, false)
+    }
 
     function animateElementToOffset ($element, target, duration, completeFn) {
       var element = $element[0]
@@ -955,6 +986,7 @@
       // create the animated piece and absolutely position it
       // over the source square
       var animatedPieceId = uuid()
+      animatedPieces.add(animatedPieceId)
       $('body').append(buildPieceHTML(piece, true, animatedPieceId))
       var $animatedPiece = $('#' + animatedPieceId)
       $animatedPiece.css({
@@ -973,6 +1005,7 @@
 
         // remove the animated piece
         $animatedPiece.remove()
+        animatedPieces.delete(animatedPieceId)
 
         // run complete function
         if (isFunction(completeFn)) {
@@ -990,6 +1023,7 @@
 
       // create the animate piece
       var pieceId = uuid()
+      animatedPieces.add(pieceId)
       $('body').append(buildPieceHTML(piece, true, pieceId))
       var $animatedPiece = $('#' + pieceId)
       $animatedPiece.css({
@@ -1007,6 +1041,7 @@
 
         // remove the animated piece
         $animatedPiece.remove()
+        animatedPieces.delete(pieceId)
 
         // run complete function
         if (isFunction(completeFn)) {
@@ -1448,12 +1483,18 @@
 
     // remove the widget from the page
     widget.destroy = function () {
-      // remove markup
+      destroyed = true
+      cancelAnimations()
+      pendingDrag = null
+      throttledMousemoveWindow.cancel()
+      throttledTouchmoveWindow.cancel()
+      $('body').off(eventNamespace)
+      $(window).off(eventNamespace)
+      $board.off(eventNamespace)
+      $container.off(eventNamespace)
+      $container.find('*').stop(true, false)
       $container.html('')
       $draggedPiece.remove()
-
-      // remove event handlers
-      $container.unbind()
     }
 
     // shorthand method to get the current FEN
@@ -1512,6 +1553,7 @@
 
       // set to white or black
       if (arg === 'white' || arg === 'black') {
+        cancelAnimations()
         currentOrientation = arg
         drawBoard()
         return currentOrientation
@@ -1519,6 +1561,7 @@
 
       // flip orientation
       if (arg === 'flip') {
+        cancelAnimations()
         currentOrientation = currentOrientation === 'white' ? 'black' : 'white'
         drawBoard()
         return currentOrientation
@@ -1557,6 +1600,10 @@
       // default for useAnimations is true
       if (useAnimation !== false) useAnimation = true
 
+      cancelAnimations()
+      pendingDrag = null
+      drawPositionInstant()
+
       if (useAnimation) {
         // start the animations
         var animations = calculateAnimations(currentPosition, position)
@@ -1572,6 +1619,7 @@
     }
 
     widget.resize = function () {
+      cancelAnimations()
       // calulate the new square size
       squareSize = calculateSquareSize()
 
@@ -1608,6 +1656,22 @@
       evt.preventDefault()
     }
 
+    function prepareDraggingPiece (square, piece, x, y) {
+      if (!config.dragStartDistance) {
+        beginDraggingPiece(square, piece, x, y)
+        return
+      }
+      pendingDrag = { square: square, piece: piece, x: x, y: y }
+    }
+
+    function startPendingDrag (x, y) {
+      if (!pendingDrag || destroyed) return
+      if (Math.hypot(x - pendingDrag.x, y - pendingDrag.y) < config.dragStartDistance) return
+      var drag = pendingDrag
+      pendingDrag = null
+      beginDraggingPiece(drag.square, drag.piece, drag.x, drag.y)
+    }
+
     function mousedownSquare (evt) {
       // do nothing if we're not draggable
       if (!config.draggable) return
@@ -1617,7 +1681,7 @@
       if (!validSquare(square)) return
       if (!currentPosition.hasOwnProperty(square)) return
 
-      beginDraggingPiece(square, currentPosition[square], evt.pageX, evt.pageY)
+      prepareDraggingPiece(square, currentPosition[square], evt.pageX, evt.pageY)
     }
 
     function touchstartSquare (e) {
@@ -1630,7 +1694,7 @@
       if (!currentPosition.hasOwnProperty(square)) return
 
       e = e.originalEvent
-      beginDraggingPiece(
+      prepareDraggingPiece(
         square,
         currentPosition[square],
         e.changedTouches[0].pageX,
@@ -1663,6 +1727,7 @@
     }
 
     function mousemoveWindow (evt) {
+      startPendingDrag(evt.pageX, evt.pageY)
       if (isDragging) {
         updateDraggedPiece(evt.pageX, evt.pageY)
       }
@@ -1671,6 +1736,8 @@
     var throttledMousemoveWindow = throttle(mousemoveWindow, config.dragThrottleRate)
 
     function touchmoveWindow (evt) {
+      var touch = evt.originalEvent.changedTouches[0]
+      startPendingDrag(touch.pageX, touch.pageY)
       // do nothing if we are not dragging a piece
       if (!isDragging) return
 
@@ -1684,6 +1751,7 @@
     var throttledTouchmoveWindow = throttle(touchmoveWindow, config.dragThrottleRate)
 
     function mouseupWindow (evt) {
+      pendingDrag = null
       // do nothing if we are not dragging a piece
       if (!isDragging) return
 
@@ -1694,6 +1762,7 @@
     }
 
     function touchendWindow (evt) {
+      pendingDrag = null
       // do nothing if we are not dragging a piece
       if (!isDragging) return
 
@@ -1758,30 +1827,30 @@
 
     function addEvents () {
       // prevent "image drag"
-      $('body').on('mousedown mousemove', '.' + CSS.piece, stopDefault)
+      $('body').on('mousedown' + eventNamespace + ' mousemove' + eventNamespace, '.' + CSS.piece, stopDefault)
 
       // mouse drag pieces
-      $board.on('mousedown', '.' + CSS.square, mousedownSquare)
-      $container.on('mousedown', '.' + CSS.sparePieces + ' .' + CSS.piece, mousedownSparePiece)
+      $board.on('mousedown' + eventNamespace, '.' + CSS.square, mousedownSquare)
+      $container.on('mousedown' + eventNamespace, '.' + CSS.sparePieces + ' .' + CSS.piece, mousedownSparePiece)
 
       // mouse enter / leave square
       $board
-        .on('mouseenter', '.' + CSS.square, mouseenterSquare)
-        .on('mouseleave', '.' + CSS.square, mouseleaveSquare)
+        .on('mouseenter' + eventNamespace, '.' + CSS.square, mouseenterSquare)
+        .on('mouseleave' + eventNamespace, '.' + CSS.square, mouseleaveSquare)
 
       // piece drag
       var $window = $(window)
       $window
-        .on('mousemove', throttledMousemoveWindow)
-        .on('mouseup', mouseupWindow)
+        .on('mousemove' + eventNamespace, throttledMousemoveWindow)
+        .on('mouseup' + eventNamespace, mouseupWindow)
 
       // touch drag pieces
       if (isTouchDevice()) {
-        $board.on('touchstart', '.' + CSS.square, touchstartSquare)
-        $container.on('touchstart', '.' + CSS.sparePieces + ' .' + CSS.piece, touchstartSparePiece)
+        $board.on('touchstart' + eventNamespace, '.' + CSS.square, touchstartSquare)
+        $container.on('touchstart' + eventNamespace, '.' + CSS.sparePieces + ' .' + CSS.piece, touchstartSparePiece)
         $window
-          .on('touchmove', throttledTouchmoveWindow)
-          .on('touchend', touchendWindow)
+          .on('touchmove' + eventNamespace, throttledTouchmoveWindow)
+          .on('touchend' + eventNamespace, touchendWindow)
       }
     }
 
