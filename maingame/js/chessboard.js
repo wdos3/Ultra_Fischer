@@ -7,6 +7,7 @@ import { generatePosition, generateBalancedPosition as findBalancedPosition } fr
 import { positionSettingsKey, cachedPositionAccepted } from "./position-policy.mjs";
 import { buildPgn, replayGame, detectResult, resultCode } from "./chess-rules.mjs";
 import { GameSession } from "./game-session.mjs";
+import { validateBackupText } from "./backup-validator.mjs";
 import { MoveRecordView } from "./move-record.mjs";
 import { RecordsView } from "./records-view.mjs";
 
@@ -23,8 +24,7 @@ import {
   saveGameProgress,
   getStatistics,
   getStorageSummary,
-  importBackup,
-  validateBackup,
+  importValidatedBackup,
   loadPositionPool,
   MAX_POSITION_BALANCE_CP,
   MIN_POSITION_BALANCE_CP,
@@ -175,6 +175,10 @@ const state = {
   session: null,
   moveLog: [],
   startingGame: false,
+  importing: false,
+  resuming: false,
+  sessionConflict: false,
+  opponentTurn: null,
   animationUntil: 0,
   currentGameId: null,
   currentGameFavorite: false,
@@ -251,7 +255,7 @@ async function saveCurrentGame(overrides = {}) {
 }
 
 async function terminateCurrentGame() {
-  if (!state.session || state.session.record.status !== "in_progress" || state.matchOver || game.game_over()) {
+  if (!state.session || !state.session.recording || state.sessionConflict || state.session.record.status !== "in_progress" || state.matchOver || game.game_over()) {
     return null;
   }
   return saveCurrentGame({ status: "terminated", termination: "new_game" });
@@ -270,12 +274,14 @@ async function persistCurrentGameQuietly() {
     await saveCurrentGame();
   } catch (error) {
     console.error(error);
-    showToast("Local storage is unavailable; this game is still playable.");
+    if (error.code === "GAME_CONFLICT") handleGameConflict(error);
+    else showToast("Local storage is unavailable; this game is still playable.");
   }
 }
 
 async function createLocalGame(startingFen, score = null) {
   await state.session?.detach();
+  state.sessionConflict = false;
   state.currentGameId = null;
   state.currentStartingFen = startingFen;
   state.currentGameFavorite = false;
@@ -440,27 +446,32 @@ function loadRecordIntoGame(record) {
 }
 
 async function resumeRecord(record) {
-  if (state.startingGame) return;
+  if (state.startingGame || state.importing || state.resuming) return;
+  const token = ++state.taskToken;
+  let loaded = false;
+  state.resuming = true;
+  cancelEngineSearches();
+  resetBoardInteraction();
+  setBusy(true);
   try {
     replayGame(record.startingFen, record.moves || [], record.currentFen);
-    ++state.taskToken;
-    cancelEngineSearches();
-    resetBoardInteraction();
-    if (state.session?.id === record.id) {
-      [ui.historyDialog, ui.favoritesDialog, ui.resumeDialog].forEach(closeOverlay);
-      await continuePlay();
-      return;
+    if (state.session?.id !== record.id || state.sessionConflict || !state.session?.recording) {
+      await terminateCurrentGame();
+      if (token !== state.taskToken) return;
+      await state.session?.detach();
+      setCurrentRecord(record);
     }
-    await terminateCurrentGame();
-    await state.session?.detach();
-    setCurrentRecord(record);
     [ui.historyDialog, ui.favoritesDialog, ui.resumeDialog].forEach(closeOverlay);
-    await continuePlay();
+    loaded = true;
   } catch (error) {
     console.error(error);
-    setBusy(false);
-    showToast("Could not resume this game: " + error.message);
+    if (error.code === "GAME_CONFLICT") handleGameConflict(error);
+    else showToast("Could not resume this game: " + error.message);
+  } finally {
+    state.resuming = false;
+    if (token === state.taskToken) setBusy(false);
   }
+  if (loaded && token === state.taskToken) await continuePlay();
 }
 
 async function persistPreferences() {
@@ -478,6 +489,7 @@ function persistPositionPool() {
 
 function setCurrentRecord(record) {
   loadRecordIntoGame(record);
+  state.sessionConflict = false;
   state.session = new GameSession(record, { create: createGame, update: saveGameProgress });
   state.playerVsPlayer = record.mode === "pvp";
   syncModeUI();
@@ -534,7 +546,7 @@ function syncSettingsUI() {
   ui.setupLevelLabel.textContent = `Level ${state.aiStrength} · ${level.moveTime} ms`;
   ui.opponentLabel.textContent = state.playerVsPlayer
     ? "Local opponent"
-    : `Stockfish Level ${state.aiStrength}`;
+    : `Stockfish Level ${state.session?.record.stockfishLevel || state.aiStrength}`;
 }
 
 function syncSettingsPanel() {
@@ -593,9 +605,9 @@ async function refreshStatistics() {
     cell.textContent = value;
     table.appendChild(cell);
   }
-  for (const level of Object.keys(stats.levels).sort((a, b) => Number(a) - Number(b))) {
+  for (const level of Object.keys(stats.levels).sort((a, b) => a === "mixed" ? 1 : b === "mixed" ? -1 : Number(a) - Number(b))) {
     const row = stats.levels[level];
-    for (const value of [level, row.total, row.wins, row.draws, row.losses, row.terminated]) {
+    for (const value of [level === "mixed" ? "Mixed" : level, row.total, row.wins, row.draws, row.losses, row.terminated]) {
       const cell = document.createElement("span");
       cell.textContent = value;
       table.appendChild(cell);
@@ -712,11 +724,12 @@ function setBusy(isBusy) {
 
 function syncActionAvailability() {
   const terminal = state.matchOver || game.game_over();
-  const blocked = state.isBusy || terminal || !state.engineReady || !state.session;
-  ui.undo.disabled = blocked;
+  const blocked = state.isBusy || state.importing || state.sessionConflict || terminal || !state.engineReady || !state.session;
+  ui.undo.disabled = blocked || state.moveLog.length === 0;
   ui.hintButton.disabled = blocked;
-  ui.resign.disabled = terminal || state.startingGame || !state.session || !state.engineReady;
-  ui.toggleMode.disabled = state.startingGame || !state.engineReady || terminal;
+  ui.resign.disabled = terminal || state.startingGame || state.importing || state.sessionConflict || !state.session || !state.engineReady;
+  ui.toggleMode.disabled = state.startingGame || state.importing || state.resuming || state.sessionConflict || !state.engineReady || terminal;
+  ui.aiStrength.disabled = state.importing || state.resuming || state.sessionConflict;
 }
 
 function terminalEvaluation(overrides = {}) {
@@ -757,7 +770,8 @@ async function finishMatch(message, overrides = {}) {
     await saveCurrentGame(overrides);
   } catch (error) {
     console.error(error);
-    showToast("The game ended, but the local record could not be saved.");
+    if (error.code === "GAME_CONFLICT") handleGameConflict(error);
+    else showToast("The game ended, but the local record could not be saved.");
   }
 }
 
@@ -1033,16 +1047,17 @@ async function runComputerTurn(token) {
     return;
   }
 
+  const fen = game.fen();
   const level = getLevelConfig(state.aiStrength);
   setStatus(`Stockfish Level ${state.aiStrength} is thinking...`);
-  const result = await state.opponentEngine.search(game.fen(), level, { kind: "opponent", priority: 0 });
-  if (token !== state.taskToken || result.cancelled || state.playerVsPlayer || state.matchOver || game.game_over()) {
+  const result = await state.opponentEngine.search(fen, level, { kind: "opponent", priority: 0 });
+  if (token !== state.taskToken || game.fen() !== fen || result.cancelled || state.playerVsPlayer || state.matchOver || game.game_over()) {
     return;
   }
 
   if (result.bestMove) {
     await waitForBoardAnimation();
-    if (token !== state.taskToken || state.playerVsPlayer || state.matchOver) return;
+    if (token !== state.taskToken || game.fen() !== fen || state.playerVsPlayer || state.matchOver) return;
     const move = {
       from: result.bestMove.slice(0, 2),
       to: result.bestMove.slice(2, 4),
@@ -1176,7 +1191,7 @@ function schedulePositionPrefetch() {
 }
 
 async function startNewGame() {
-  if (state.startingGame) return;
+  if (state.startingGame || state.importing || state.resuming) return;
 
   state.startingGame = true;
   resetBoardInteraction();
@@ -1243,7 +1258,8 @@ async function startNewGame() {
   } catch (error) {
     console.error(error);
     setStatus("Position search interrupted. Try New Game again.");
-    showToast(error.message);
+    if (error.code === "GAME_CONFLICT") handleGameConflict(error);
+    else showToast(error.message);
   } finally {
     state.startingGame = false;
     if (token === state.taskToken) {
@@ -1257,7 +1273,7 @@ async function startNewGame() {
 }
 
 function resignGame() {
-  if (!state.session || state.matchOver || game.game_over() || state.startingGame) return;
+  if (!state.session || state.sessionConflict || state.importing || state.matchOver || game.game_over() || state.startingGame) return;
   const loser = state.playerVsPlayer ? game.turn() : state.actualPlayerColor;
   const winnerColor = loser === "w" ? "b" : "w";
   void finishMatch(`${sideName(winnerColor)} wins by resignation.`, { result: resultForWinner(winnerColor), termination: "resignation" });
@@ -1362,7 +1378,7 @@ function greySquare(square) {
 
 function canSelectSquare(square) {
   const piece = game.get(square);
-  if (!piece || !state.session || !state.engineReady || state.isBusy || state.matchOver || game.game_over()) {
+  if (!piece || isBoardLocked()) {
     return false;
   }
   return piece.color === game.turn() && (state.playerVsPlayer || piece.color === state.actualPlayerColor);
@@ -1379,7 +1395,7 @@ function showLegalMoves(square) {
 }
 
 function commitMove(source, target, renderImmediately = false, promotion = "q") {
-  if (!state.session || !state.engineReady || state.isBusy || state.matchOver || game.game_over() || (!state.playerVsPlayer && game.turn() !== state.actualPlayerColor)) return null;
+  if (isBoardLocked() || (!state.playerVsPlayer && game.turn() !== state.actualPlayerColor)) return null;
   const move = game.move({ from: source, to: target, promotion });
   if (!move) {
     return null;
@@ -1410,7 +1426,7 @@ function attemptMove(source, target, renderImmediately = false) {
 }
 
 function handleSquareClick(square) {
-  if (state.isBusy || state.matchOver || game.game_over() || Date.now() < state.suppressClickUntil) {
+  if (isBoardLocked() || Date.now() < state.suppressClickUntil) {
     return;
   }
   if (!state.selectedSquare) {
@@ -1452,34 +1468,61 @@ async function afterMove() {
   await continuePlay();
 }
 
+function isBoardLocked() {
+  return !state.session || !state.engineReady || state.isBusy || state.importing || state.sessionConflict || state.matchOver || game.game_over();
+}
+
+function handleGameConflict(error) {
+  state.sessionConflict = true;
+  if (state.session) state.session.recording = false;
+  ++state.taskToken;
+  cancelEngineSearches();
+  resetBoardInteraction();
+  closeOverlay(ui.resultDialog);
+  setBusy(false);
+  setStatus(error.message);
+  showToast("Game changed elsewhere. Resume its latest saved version from history.");
+}
+
 async function continuePlay() {
+  if (state.importing || state.sessionConflict || !state.session || state.matchOver) return;
+  if (game.game_over()) { await finishMatch(describeResult()); return; }
   const token = state.taskToken;
-  const botTurn = !state.playerVsPlayer && !state.matchOver && !game.game_over() && game.turn() !== state.actualPlayerColor;
+  const fen = game.fen();
+  const botTurn = !state.playerVsPlayer && game.turn() !== state.actualPlayerColor;
   if (!botTurn) {
     setBusy(false);
     setStatus(describeResult());
     void refreshEvaluation();
     return;
   }
-  setBusy(true);
-  try {
-    await runComputerTurn(token);
-  } catch (error) {
-    console.error(error);
-    if (token === state.taskToken) setStatus("Engine interrupted. Switch to PvP or retry with New Game.");
-  } finally {
-    if (token === state.taskToken) {
-      setBusy(false);
-      void refreshEvaluation();
+  if (state.opponentTurn?.token === token && state.opponentTurn.fen === fen) return state.opponentTurn.promise;
+  const turn = { token, fen };
+  state.opponentTurn = turn;
+  turn.promise = (async () => {
+    setBusy(true);
+    try {
+      await runComputerTurn(token);
+    } catch (error) {
+      console.error(error);
+      if (error.code === "GAME_CONFLICT") handleGameConflict(error);
+      else if (token === state.taskToken) setStatus("Engine interrupted. Switch to PvP or retry with New Game.");
+    } finally {
+      if (state.opponentTurn === turn) state.opponentTurn = null;
+      if (token === state.taskToken) {
+        setBusy(false);
+        void refreshEvaluation();
+      }
     }
-  }
+  })();
+  return turn.promise;
 }
 
 function createBoard() {
   const config = {
     draggable: true,
     onDragStart(source, piece) {
-      if (!state.session || !state.engineReady || state.isBusy || state.matchOver || game.game_over()) {
+      if (isBoardLocked()) {
         return false;
       }
       if (piece[0] !== game.turn()) {
@@ -1532,6 +1575,7 @@ function createBoard() {
   state.board = ChessBoard("board", config);
   if (!state.boardInteractionBound) {
     const handleBoardPress = (event) => {
+      if (event.type === "touchstart" && event.cancelable) event.preventDefault();
       if (event.type === "mousedown" && event.button !== 0) {
         return;
       }
@@ -1541,7 +1585,7 @@ function createBoard() {
       }
     };
     ui.board.addEventListener("mousedown", handleBoardPress);
-    ui.board.addEventListener("touchstart", handleBoardPress, { passive: true });
+    ui.board.addEventListener("touchstart", handleBoardPress, { passive: false });
     state.boardInteractionBound = true;
   }
   if (!state.resizeBound) {
@@ -1629,30 +1673,52 @@ async function handleRecordAction(event, container) {
 
 async function importSelectedBackup() {
   const file = ui.importFile.files?.[0];
-  if (!file) return;
+  if (!file || state.importing || state.startingGame || state.resuming) return;
   if (file.size > 5 * 1024 * 1024) { showToast("Backup is larger than 5 MB."); ui.importFile.value = ""; return; }
   const session = state.session;
-  const recording = session?.recording;
-  let imported = false;
+  state.importing = true;
+  const token = ++state.taskToken;
+  cancelEngineSearches();
+  resetBoardInteraction();
+  setBusy(true);
+  const controls = [ui.importData, ui.exportData, ui.clearHistory, ui.clearFavorites, ui.resetPreferences, ui.deleteAllData];
+  controls.forEach((control) => { control.disabled = true; });
+  ui.importData.textContent = "Validating...";
   try {
-    const backup = JSON.parse(await file.text());
-    validateBackup(backup);
+    const valid = await validateBackupText(await file.text());
     const replace = window.confirm("Press OK to replace local data, or Cancel to merge this backup.");
-    if (session) session.recording = false;
-    await session?.queue;
-    await importBackup(backup, replace ? "replace" : "merge");
-    imported = true;
-    applyPreferences(await getPreferences());
+    // Previous saves have already reported their errors; importing may recover the archive.
+    await session?.queue.catch(() => null);
+    await importValidatedBackup(valid, replace ? "replace" : "merge");
+    applyPreferences(valid.preferences);
+    const current = session?.id ? await getGame(session.id) : null;
+    if (session) await session.detach();
+    if (current) {
+      setCurrentRecord(current);
+    } else if (session) {
+      state.session = null;
+      state.currentGameId = null;
+      state.currentStartingFen = null;
+      state.matchOver = true;
+      state.sessionConflict = false;
+      setStatus("Backup imported. No active saved game.");
+    }
     showToast("Backup imported.");
     await refreshStorageSummary();
     await refreshHistoryList();
     await refreshFavoritesList();
   } catch (error) {
-    if (session && !imported) session.recording = recording;
     console.error(error);
     showToast(error.message || "Could not import backup.");
   } finally {
+    state.importing = false;
+    controls.forEach((control) => { control.disabled = false; });
+    ui.importData.textContent = "Import backup";
     ui.importFile.value = "";
+    if (token === state.taskToken) {
+      setBusy(false);
+      await continuePlay();
+    }
   }
 }
 
@@ -1696,25 +1762,22 @@ function bindEvents() {
   });
 
   ui.undo.addEventListener("click", async () => {
-    if (state.isBusy || state.matchOver || game.game_over()) {
-      return;
-    }
+    if (isBoardLocked()) return;
+    const token = ++state.taskToken;
     cancelEngineSearches();
     resetBoardInteraction();
+    setBusy(true);
     const movesToUndo = state.playerVsPlayer ? 1 : 2;
     for (let count = 0; count < movesToUndo; count += 1) {
       if (!game.undo()) break;
       state.moveLog.pop();
     }
     state.board.position(game.fen(), false);
-    state.taskToken += 1;
-    state.matchOver = false;
-    syncActionAvailability();
     updateSideLabels();
     renderMoveHistory();
     setStatus(describeResult());
-    void persistCurrentGameQuietly();
-    await refreshEvaluation();
+    await persistCurrentGameQuietly();
+    if (token === state.taskToken) await continuePlay();
   });
 
   ui.resign.addEventListener("click", () => {
@@ -1740,9 +1803,9 @@ function bindEvents() {
   });
 
   ui.toggleMode.addEventListener("click", async () => {
-    if (state.startingGame || state.matchOver || game.game_over()) return;
+    if (state.startingGame || state.importing || state.resuming || state.sessionConflict || state.matchOver || game.game_over()) return;
     state.playerVsPlayer = !state.playerVsPlayer;
-    state.taskToken += 1;
+    const token = ++state.taskToken;
     cancelEngineSearches();
     resetBoardInteraction();
     setBusy(false);
@@ -1750,7 +1813,7 @@ function bindEvents() {
     syncModeUI();
     syncSettingsUI();
     await persistCurrentGameQuietly();
-    await continuePlay();
+    if (token === state.taskToken) await continuePlay();
   });
 
   ui.themeSelect.addEventListener("change", () => {
@@ -1921,10 +1984,19 @@ function bindEvents() {
   });
 
   ui.aiStrength.addEventListener("change", async () => {
+    if (state.importing || state.resuming || state.sessionConflict) return;
     state.aiStrength = normalizeLevel(ui.aiStrength.value);
     void persistPreferences();
-    syncSettingsUI();
-    await refreshEvaluation();
+    if (state.session && !state.matchOver && !game.game_over()) {
+      const token = ++state.taskToken;
+      cancelEngineSearches();
+      state.session.setDifficulty(Number(state.aiStrength), state.moveLog.length);
+      syncSettingsUI();
+      await persistCurrentGameQuietly();
+      if (token === state.taskToken) await continuePlay();
+    } else {
+      syncSettingsUI();
+    }
   });
 
   document.addEventListener("keydown", (event) => {

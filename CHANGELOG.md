@@ -2,6 +2,27 @@
 
 All notable Ultra Fischer changes currently present in this repository are recorded here. Legacy entries are reconstructed from Git history; the latest entry records the implementation and verification directly.
 
+## 2026-10-12
+
+### Input, persistence, and turn recovery
+
+- Prevent touch compatibility mouse events from cancelling square selection; retain both touch tapping and dragging.
+- Add transactional progress revisions and import generations. Stale tabs cannot overwrite newer moves, completed results, deleted games, or reimported records, and can recover by resuming the latest record or starting a new match.
+- Preserve independent archive name/favorite edits during autosaves without introducing false progress conflicts.
+- Rebase active sessions after successful backup merges; resume autosaving instead of silently detaching the active writer. Replacement that removes the active record disables the old board.
+- Move JSON parsing, SAN validation, FEN verification, and PGN reconstruction off the main thread into a disposable backup worker; remove duplicate validation and replay passes.
+- Pause conflicting game/data operations during import, and preserve active recording after invalid imports.
+- Reconcile turns after Undo so undoing a lone AI opening starts a replacement opponent move.
+- Guard asynchronous mode, resume, undo, and difficulty continuations with match tokens and position checks; deduplicate opponent searches for each active turn.
+- Persist mid-game difficulty changes with move boundaries and label mixed-level archives/statistics separately. Undo retains the selected difficulty at its rewound boundary.
+- Start search deadlines when requests enter the queue, including worker initialization. Expiring queued work leaves unrelated searches running, and disposing during initialization cannot resurrect a fallback worker.
+
+### Verification
+
+- Add unit regressions for progress conflicts, delete/reimport identity, serialized revisions, mixed-level statistics, difficulty rewind, queued/startup deadlines, and startup disposal.
+- Add browser regressions for touch taps/drags, active merge/replace recovery, conflicting tabs, AI-opening undo, rapid mode switches with delayed persistence, live difficulty changes, and responsive large imports.
+- Retain real Stockfish 18 WASM startup and randomized depth-confirmed position checks under production security headers.
+
 ## 2026-10-11
 
 ### Engine reliability and position accuracy

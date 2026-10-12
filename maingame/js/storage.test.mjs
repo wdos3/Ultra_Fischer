@@ -128,8 +128,46 @@ test("autosaves preserve archive edits and never resurrect deleted records", asy
   assert.equal(saved.label, "Renamed");
   assert.equal(saved.isFavorite, false);
   await deleteGame(game.id);
-  assert.equal(await saveGameProgress(game), null);
+  await assert.rejects(saveGameProgress(saved), (error) => error.code === "GAME_CONFLICT");
   assert.equal(await getGame(game.id), undefined);
+});
+
+test("stale tabs cannot overwrite newer game progress or terminal results", async () => {
+  await clearGames();
+  const first = await createGame({ id: "shared", startingFen, moves: [] });
+  const latest = await saveGameProgress({ ...first, moves: ["Ka2"], status: "completed", result: "draw" });
+  await assert.rejects(saveGameProgress({ ...first, moves: ["Kb1"] }), (error) => error.code === "GAME_CONFLICT");
+  assert.deepEqual(await getGame(first.id), latest);
+});
+
+test("merging a backup invalidates old writers without invalidating unrelated games", async () => {
+  await clearGames();
+  const overwritten = await createGame({ id: "overwritten", startingFen, moves: [] });
+  const unrelated = await createGame({ id: "unrelated", startingFen, moves: [] });
+  await importBackup({ format: "Ultra_Fischer-backup", version: 1, games: [overwritten], favoriteGames: [] });
+  assert.equal((await getGame(overwritten.id)).revision, overwritten.revision + 1);
+  await assert.rejects(saveGameProgress(overwritten), (error) => error.code === "GAME_CONFLICT");
+  assert.equal((await saveGameProgress(unrelated)).revision, unrelated.revision + 1);
+});
+
+test("deleting and reimporting the same ID cannot revive an old writer", async () => {
+  await clearGames();
+  const old = await createGame({ id: "reimported", startingFen, moves: [] });
+  await deleteGame(old.id);
+  await importBackup({ format: "Ultra_Fischer-backup", version: 1, games: [old], favoriteGames: [] });
+  const imported = await getGame(old.id);
+  assert.equal(imported.revision, old.revision);
+  assert.notEqual(imported.generation, old.generation);
+  await assert.rejects(saveGameProgress(old), (error) => error.code === "GAME_CONFLICT");
+});
+
+test("mixed difficulty games have their own statistics bucket", async () => {
+  await clearGames();
+  await createGame({ id: "mixed", startingFen, moves: ["Ka2", "Kh7"], stockfishLevel: 8,
+    levelHistory: [{ ply: 0, level: 4 }, { ply: 1, level: 8 }], status: "completed", result: "win" });
+  const stats = await getStatistics();
+  assert.equal(stats.levels.mixed.wins, 1);
+  assert.equal(stats.levels[8], undefined);
 });
 
 test("AI statistics exclude local PvP records", async () => {

@@ -3,6 +3,14 @@ import { resolveEngineDifficulty, selectCandidateMove } from "./stockfish-config
 export const STOCKFISH_VERSION = "18";
 const SOURCES = ["stockfish-18-lite-single.js", "stockfish-18-asm.js"];
 
+export class EngineTimeoutError extends Error {
+  constructor() {
+    super("Stockfish search timed out. Retry the action.");
+    this.name = "EngineTimeoutError";
+    this.code = "ENGINE_TIMEOUT";
+  }
+}
+
 export class StockfishEngine {
   constructor({ workerFactory = (url) => new Worker(url), startupTimeout = 20000, cancelTimeout = 2000 } = {}) {
     this.workerFactory = workerFactory;
@@ -13,6 +21,7 @@ export class StockfishEngine {
     this.options = {};
     this.worker = null;
     this.disposed = false;
+    this.startupAbort = null;
     this.resetHash = true;
     this.sequence = 0;
     this.initPromise = this.initialize();
@@ -23,6 +32,7 @@ export class StockfishEngine {
     let cause;
     const sources = typeof WebAssembly === "object" ? SOURCES : SOURCES.slice(1);
     for (const source of sources) {
+      if (this.disposed) throw new Error("Stockfish is closed.");
       try {
         await this.startWorker(source);
         this.source = source;
@@ -31,6 +41,7 @@ export class StockfishEngine {
         cause = error;
         this.worker?.terminate();
         this.worker = null;
+        if (this.disposed) throw error;
       }
     }
     throw new Error("Stockfish could not start. Please retry the game.", { cause });
@@ -43,6 +54,8 @@ export class StockfishEngine {
       this.options = {};
       let ready = false;
       const timer = setTimeout(() => reject(new Error("Stockfish startup timed out.")), this.startupTimeout);
+      const abort = (error) => { clearTimeout(timer); reject(error); };
+      this.startupAbort = abort;
       const fail = (error) => {
         const cause = error instanceof Error ? error : new Error(error.message || "Stockfish worker failed.");
         clearTimeout(timer);
@@ -66,6 +79,7 @@ export class StockfishEngine {
         } else if (line === "readyok" && !ready) {
           ready = true;
           clearTimeout(timer);
+          if (this.startupAbort === abort) this.startupAbort = null;
           resolve();
         } else {
           this.handleMessage(line);
@@ -82,6 +96,9 @@ export class StockfishEngine {
     if (this.disposed) return Promise.reject(new Error("Stockfish is closed."));
     return new Promise((resolve, reject) => {
       const task = { fen, profile, kind, priority, timeoutMs, resolve, reject, sequence: this.sequence++, depths: new Map(), settled: false };
+      const budget = timeoutMs ?? Math.max(3000, profile.moveTime + 3000);
+      task.deadline = performance.now() + budget;
+      task.timer = setTimeout(() => this.expireTask(task), Math.max(0, budget));
       this.pending.push(task);
       this.pending.sort((a, b) => a.priority - b.priority || a.sequence - b.sequence);
       if (this.active && priority < this.active.priority) this.cancelActive();
@@ -97,6 +114,10 @@ export class StockfishEngine {
       if (this.active || this.disposed) return;
       const task = this.pending.shift();
       if (!task) return;
+      if (performance.now() >= task.deadline) {
+        this.settle(task, null, new EngineTimeoutError());
+        return;
+      }
       task.config = resolveEngineDifficulty(task.profile, this.options);
       this.active = task;
       const { config } = task;
@@ -107,7 +128,6 @@ export class StockfishEngine {
       if (config.useLimitStrength && this.options.uci_elo) send(`setoption name UCI_Elo value ${config.elo}`);
       if (this.options.multipv) send(`setoption name MultiPV value ${config.candidateCount}`);
       send(`position fen ${task.fen}`);
-      task.timer = setTimeout(() => this.failWorker(new Error("Stockfish search timed out. The engine will restart.")), task.timeoutMs ?? Math.max(3000, config.moveTime + 3000));
       send(`go depth ${config.depth} movetime ${config.moveTime}`);
     } catch (error) {
       this.failWorker(error);
@@ -147,8 +167,20 @@ export class StockfishEngine {
 
   settle(task, result, error) {
     if (task.settled) return;
+    clearTimeout(task.timer);
     task.settled = true;
     if (error) task.reject(error); else task.resolve(result);
+  }
+
+  expireTask(task) {
+    if (task.settled) return;
+    const error = new EngineTimeoutError();
+    if (this.active === task) {
+      this.failWorker(error);
+    } else {
+      this.pending = this.pending.filter((pending) => pending !== task);
+      this.settle(task, null, error);
+    }
   }
 
   cancelActive() {
@@ -172,6 +204,8 @@ export class StockfishEngine {
   }
 
   failWorker(error) {
+    this.startupAbort?.(error);
+    this.startupAbort = null;
     if (this.active) {
       clearTimeout(this.active.timer);
       clearTimeout(this.active.cancelTimer);

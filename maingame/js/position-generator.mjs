@@ -203,11 +203,15 @@ export async function generateBalancedPosition(sideToMove, {
       }, { kind: "position", priority: 5, timeoutMs: Math.max(1, Math.floor(remaining)) });
     };
     if (deadline - performance.now() < 300) break;
-    const screen = await search(POSITION_SCREEN_DEPTH, 300);
+    let screen;
+    try { screen = await search(POSITION_SCREEN_DEPTH, 300); }
+    catch (error) { if (error.code === "ENGINE_TIMEOUT") return null; throw error; }
     if (isCancelled() || screen.cancelled) return null;
     if (!screen.score || screen.score.type !== "cp" || screen.score.depth < POSITION_SCREEN_DEPTH || Math.abs(screen.score.value) > Math.max(350, acceptanceCp * 1.5)) continue;
     if (deadline - performance.now() < 400) break;
-    const confirmation = await search(POSITION_CONFIRM_DEPTH, 2500, friendlyMode ? 2 : 1);
+    let confirmation;
+    try { confirmation = await search(POSITION_CONFIRM_DEPTH, 2500, friendlyMode ? 2 : 1); }
+    catch (error) { if (error.code === "ENGINE_TIMEOUT") return null; throw error; }
     if (isCancelled() || confirmation.cancelled) return null;
     if (performance.now() > deadline || !confirmationAccepted(probe, confirmation, acceptanceCp, friendlyMode)) continue;
     return {

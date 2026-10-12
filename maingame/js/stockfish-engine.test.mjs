@@ -113,3 +113,44 @@ test("missing stop response restarts the worker instead of blocking the queue", 
   await engine.ready();
   assert.equal(workers.length, 2);
 });
+
+test("search deadlines include slow worker startup", async (t) => {
+  const worker = new FakeWorker();
+  const postMessage = worker.postMessage.bind(worker);
+  worker.postMessage = (command) => {
+    if (command === "uci") setTimeout(() => postMessage(command), 150);
+    else postMessage(command);
+  };
+  const engine = new StockfishEngine({ workerFactory: () => worker });
+  t.after(() => engine.dispose());
+  const start = performance.now();
+  await assert.rejects(engine.search(fen, ANALYSIS_PROFILE, { timeoutMs: 30 }), (error) => error.code === "ENGINE_TIMEOUT");
+  assert.ok(performance.now() - start < 120);
+  assert.equal(worker.commands.some((command) => command.startsWith("go ")), false);
+});
+
+test("queued search deadlines expire without restarting an unrelated active search", async (t) => {
+  const { engine, worker, workers } = await fixture(t);
+  const active = engine.search(fen, ANALYSIS_PROFILE, { kind: "opponent", priority: 0 });
+  await tick();
+  await assert.rejects(engine.search(fen, ANALYSIS_PROFILE, { timeoutMs: 20 }), (error) => error.code === "ENGINE_TIMEOUT");
+  assert.equal(workers.length, 1);
+  worker.emit("bestmove a1a2");
+  assert.equal((await active).bestMove, "a1a2");
+  assert.equal(worker.commands.filter((command) => command.startsWith("go ")).length, 1);
+});
+
+test("disposing during startup does not resurrect a fallback worker", async () => {
+  const workers = [];
+  const engine = new StockfishEngine({ workerFactory: () => {
+    const worker = new FakeWorker();
+    worker.postMessage = () => {};
+    workers.push(worker);
+    return worker;
+  } });
+  engine.dispose();
+  await assert.rejects(engine.ready(), /closed/);
+  await tick();
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].terminated, true);
+});

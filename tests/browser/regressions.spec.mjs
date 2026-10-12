@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 const standardFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
@@ -8,10 +9,10 @@ test.beforeEach(async ({ page }) => {
 });
 test.afterEach(async ({ page }) => { expect(page.runtimeErrors).toEqual([]); });
 
-async function seed(page, record = {}, { fake = true, resume = true } = {}) {
+async function seed(page, record = {}, { fake = true, resume = true, create = true } = {}) {
   await page.goto("/404.html");
   await page.addScriptTag({ url: "/maingame/js/chess.js" });
-  await page.evaluate(async ({ standardFen, record }) => {
+  if (create) await page.evaluate(async ({ standardFen, record }) => {
     const storage = await import("/maingame/js/storage.mjs");
     await storage.createGame({
       id: "fixture", label: "Fixture game", startingFen: standardFen, currentFen: record.startingFen || standardFen,
@@ -19,10 +20,12 @@ async function seed(page, record = {}, { fake = true, resume = true } = {}) {
     });
   }, { standardFen, record });
   if (fake) await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
     window.testWorkers = [];
     window.holdOpponent = false;
     class ControlledWorker extends EventTarget {
       constructor(url) {
+        if (String(url).includes("backup-worker.js")) return new NativeWorker(url);
         super(); this.url = String(url); this.commands = []; this.multiPV = 1; window.testWorkers.push(this);
         if (window.failEngineStartup) queueMicrotask(() => this.dispatchEvent(new Event("error")));
       }
@@ -78,6 +81,171 @@ async function openRecords(page, panel) {
   await page.locator("#records-toggle").click();
   await page.locator('#records-menu [data-panel="' + panel + '"]').click();
 }
+
+async function inspectController(page) {
+  const source = await readFile(new URL("../../maingame/js/chessboard.js", import.meta.url), "utf8");
+  await page.route("**/maingame/js/chessboard.js*", (route) => route.fulfill({
+    contentType: "text/javascript", body: source + "\nglobalThis.testController = { state, game, continuePlay };",
+  }));
+}
+
+async function importFile(page, backup, replace = false) {
+  await page.locator("#settings-toggle").click();
+  await page.locator('#app-menu [data-panel="data"]').click();
+  page.once("dialog", (dialog) => replace ? dialog.accept() : dialog.dismiss());
+  await page.locator("#import-file").setInputFiles({
+    name: "backup.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(backup)),
+  });
+  await expect(page.locator("#import-data")).toBeEnabled({ timeout: 120000 });
+  await expect(page.locator("#toast")).toHaveText("Backup imported.");
+  await page.locator('#data-dialog [data-close-panel]').click();
+}
+
+test("touch taps and touch drags each make exactly one move", async ({ browser }) => {
+  const context = await browser.newContext({ isMobile: true, hasTouch: true, viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  try {
+    await inspectController(page);
+    await seed(page, { mode: "pvp" });
+    await page.locator('#board [data-square="e2"]').tap();
+    await page.locator('#board [data-square="e4"]').tap();
+    await expect.poll(async () => (await readRecord(page)).moves).toEqual(["e4"]);
+    await page.waitForFunction(() => performance.now() >= window.testController.state.animationUntil);
+    const from = await page.locator('#board [data-square="e7"]').boundingBox();
+    const to = await page.locator('#board [data-square="e5"]').boundingBox();
+    const cdp = await context.newCDPSession(page);
+    const point = (rect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point(from)] });
+    for (let step = 1; step <= 10; step += 1) {
+      const start = point(from), end = point(to);
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: start.x, y: start.y + (end.y - start.y) * step / 10 }] });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect.poll(async () => (await readRecord(page)).moves).toEqual(["e4", "e5"]);
+  } finally { await context.close(); }
+});
+
+test("merging unrelated games preserves active recording", async ({ page }) => {
+  await seed(page, { mode: "pvp" });
+  await clickMove(page, "e2", "e4");
+  await importFile(page, { format: "Ultra_Fischer-backup", version: 1,
+    games: [{ id: "imported", startingFen: standardFen, moves: [] }], favoriteGames: [] });
+  await clickMove(page, "e7", "e5");
+  await expect.poll(async () => (await readRecord(page)).moves).toEqual(["e4", "e5"]);
+  expect((await readRecord(page, "imported")).id).toBe("imported");
+});
+
+test("overlapping imports rebase the active game; replacement removes its old board", async ({ page }) => {
+  await seed(page, { mode: "pvp" });
+  const currentFen = await page.evaluate((fen) => { const chess = new window.Chess(fen); chess.move("d4"); return chess.fen(); }, standardFen);
+  const backup = { format: "Ultra_Fischer-backup", version: 1, games: [{
+    id: "fixture", startingFen: standardFen, currentFen, moves: ["d4"], status: "in_progress", mode: "pvp",
+  }], favoriteGames: [] };
+  await importFile(page, backup);
+  await expect(page.locator('#board [data-square="d4"] img')).toHaveCount(1);
+  await clickMove(page, "e7", "e5");
+  await expect.poll(async () => (await readRecord(page)).moves).toEqual(["d4", "e5"]);
+  await importFile(page, { ...backup, games: [] }, true);
+  await expect(page.locator("#undo")).toBeDisabled();
+  await expect(page.locator("#resign")).toBeDisabled();
+  await clickMove(page, "e2", "e4");
+  expect(await readRecord(page)).toBeUndefined();
+});
+
+test("a stale second tab cannot overwrite the first and can resume its latest game", async ({ page, context }) => {
+  await seed(page, { mode: "pvp" });
+  const second = await context.newPage();
+  try {
+    await seed(second, {}, { create: false });
+    await clickMove(page, "e2", "e4");
+    await expect.poll(async () => (await readRecord(page)).moves).toEqual(["e4"]);
+    await clickMove(second, "d2", "d4");
+    await expect(second.locator("#status-text")).toContainText("another tab");
+    expect((await readRecord(page)).moves).toEqual(["e4"]);
+    await expect(second.locator("#undo")).toBeDisabled();
+    await openRecords(second, "history");
+    await second.locator('#history-list [data-record-id="fixture"][data-record-action="resume"]').click();
+    await clickMove(second, "e7", "e5");
+    await expect.poll(async () => (await readRecord(page)).moves).toEqual(["e4", "e5"]);
+  } finally { await second.close(); }
+});
+
+test("undoing the AI opening restarts the opponent turn", async ({ page }) => {
+  const currentFen = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
+  await seed(page, { playerColor: "b", engineColor: "w", moves: ["e4"], currentFen });
+  await page.locator("#undo").click();
+  await expect.poll(async () => (await readRecord(page)).moves.length).toBe(1);
+  await expect(page.locator("#record-turn")).toHaveText("Black to move");
+  await expect(page.locator("#status-text")).not.toContainText("thinking");
+  await expect(page.locator("#resign")).toBeEnabled();
+  expect(await page.evaluate(() => window.testWorkers.flatMap((worker) => worker.commands).filter((command) => command.startsWith("go depth 5 ")).length)).toBe(1);
+});
+
+test("rapid mode changes with slow autosaves start only one replacement opponent turn", async ({ page }) => {
+  await inspectController(page);
+  await seed(page);
+  await page.evaluate(() => { window.holdOpponent = true; });
+  await clickMove(page, "e2", "e4");
+  await expect(page.locator("#status-text")).toContainText("thinking");
+  await page.evaluate(() => {
+    const session = window.testController.state.session;
+    const update = session.persistence.update;
+    session.persistence.update = async (record) => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return update(record);
+    };
+    document.getElementById("toggle-mode").click();
+    document.getElementById("toggle-mode").click();
+  });
+  await expect.poll(async () => page.evaluate(() => window.testWorkers.flatMap((worker) => worker.commands).filter((command) => command.startsWith("go depth 5 ")).length)).toBe(2);
+  await page.evaluate(() => { window.holdOpponent = false; window.testWorkers.forEach((worker) => { worker.held?.(); worker.held = null; }); });
+  await expect.poll(async () => (await readRecord(page)).moves.length).toBe(2);
+  await expect(page.locator("#status-text")).not.toContainText("interrupted");
+  await expect(page.locator("#undo")).toBeEnabled();
+  expect(await page.evaluate(() => window.testWorkers.flatMap((worker) => worker.commands).filter((command) => command.startsWith("go depth 5 ")).length)).toBe(2);
+});
+
+test("live difficulty changes persist their history and use the matching search profile", async ({ page }) => {
+  await seed(page);
+  await clickMove(page, "e2", "e4");
+  await expect.poll(async () => (await readRecord(page)).moves.length).toBe(2);
+  await page.locator("#settings-toggle").click();
+  await page.locator('#app-menu [data-panel="settings"]').click();
+  await page.locator("#ai-strength").selectOption("8");
+  await expect.poll(async () => (await readRecord(page)).stockfishLevel).toBe(8);
+  expect((await readRecord(page)).levelHistory).toEqual([{ ply: 0, level: 4 }, { ply: 2, level: 8 }]);
+  await page.locator("#settings-close").click();
+  await clickMove(page, "d2", "d4");
+  await expect.poll(async () => (await readRecord(page)).moves.length).toBe(4);
+  expect(await page.evaluate(() => window.testWorkers.some((worker) => worker.commands.includes("go depth 22 movetime 1000")))).toBe(true);
+  await page.locator("#resign").click();
+  await expect(page.locator("#result-title")).toHaveText("You lose");
+  const stats = await page.evaluate(async () => (await import("/maingame/js/storage.mjs")).getStatistics());
+  expect(stats.levels.mixed.losses).toBe(1);
+  await page.locator("#result-close").click();
+  await openRecords(page, "history");
+  await expect(page.locator("#history-list")).toContainText("Mixed levels (4, 8)");
+});
+
+test("large backup validation leaves the main thread responsive", async ({ page }) => {
+  test.setTimeout(120000);
+  await seed(page, { mode: "pvp" });
+  const template = await page.evaluate((fen) => {
+    const chess = new window.Chess(fen);
+    for (let index = 0; index < 5; index += 1) for (const move of ["Nf3", "Nf6", "Ng1", "Ng8"]) chess.move(move);
+    window.importTicks = 0;
+    window.importTimer = setInterval(() => { window.importTicks += 1; }, 20);
+    return { startingFen: fen, currentFen: chess.fen(), moves: chess.history(), mode: "pvp" };
+  }, standardFen);
+  const games = Array.from({ length: 300 }, (_, index) => ({ ...template, id: "bulk" + index }));
+  const started = Date.now();
+  await importFile(page, { format: "Ultra_Fischer-backup", version: 1, games, favoriteGames: games.slice(0, 100) });
+  const duration = Date.now() - started;
+  const ticks = await page.evaluate(() => { clearInterval(window.importTimer); return window.importTicks; });
+  console.log("Backup validation responsiveness:", JSON.stringify({ games: 300, durationMs: duration, mainThreadTicks: ticks }));
+  expect(ticks).toBeGreaterThan(duration / 20 * 0.4);
+  expect((await readRecord(page, "bulk299")).moves).toEqual(template.moves);
+});
 
 test("real Stockfish starts as WASM under production security headers", async ({ page }) => {
   const errors = [];

@@ -1,4 +1,5 @@
 import { listGamesPage } from "./storage.mjs";
+import { difficultyLabel } from "./game-difficulty.mjs";
 
 const sideName = (color) => color === "w" ? "White" : "Black";
 const formatDate = (timestamp) => new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp || Date.now()));
@@ -75,7 +76,7 @@ function renderRecords(container, games, favorites, append) {
     appendRecordTitle(main, record);
     const detail = document.createElement("span");
     detail.className = "record-item-detail";
-    detail.textContent = `${sideName(record.playerColor)} vs ${record.mode === "pvp" ? "Local opponent" : `Level ${record.stockfishLevel}`} · ${formatDate(record.updatedAt)} · ${record.moveCount || 0} moves`;
+    detail.textContent = `${sideName(record.playerColor)} vs ${record.mode === "pvp" ? "Local opponent" : difficultyLabel(record)} · ${formatDate(record.updatedAt)} · ${record.moveCount || 0} moves`;
     const meta = document.createElement("span");
     meta.className = "record-item-meta";
     meta.textContent = record.status === "terminated" && record.termination && record.termination !== "new_game"

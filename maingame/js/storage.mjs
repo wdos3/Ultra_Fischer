@@ -1,4 +1,6 @@
-import { isValidChessFen, replayGame, buildPgn, resultCode } from "./chess-rules.mjs";
+import { isValidChessFen, replayGame, resultCode } from "./chess-rules.mjs";
+import { GameConflictError } from "./game-errors.mjs";
+import { normalizeLevelHistory, statisticsLevel } from "./game-difficulty.mjs";
 
 const DB_NAME = "Ultra_Fischer";
 const LEGACY_DB_NAME = "ultra-fischer";
@@ -310,15 +312,20 @@ export function savePositionPool(candidates) {
 function cleanGame(record) {
   const now = Date.now();
   const status = ["completed", "terminated"].includes(record.status) ? record.status : "in_progress";
+  const level = Math.round(Math.max(1, Math.min(8, Number(record.stockfishLevel) || 4)));
+  const moveCount = Array.isArray(record.moves) ? record.moves.length : 0;
   return {
     id: String(record.id || makeId("game")),
+    revision: Number.isSafeInteger(record.revision) && record.revision >= 0 ? record.revision : 0,
+    generation: typeof record.generation === "string" ? record.generation : null,
     label: String(record.label || "Game").slice(0, 120),
     startingFen: normalizeFen(record.startingFen),
     currentFen: normalizeFen(record.currentFen || record.startingFen),
     mode: record.mode === "pvp" ? "pvp" : "pvai",
     playerColor: record.playerColor === "b" ? "b" : "w",
     engineColor: record.engineColor === "w" ? "w" : "b",
-    stockfishLevel: Math.max(1, Math.min(8, Number(record.stockfishLevel) || 4)),
+    stockfishLevel: level,
+    levelHistory: normalizeLevelHistory(record.levelHistory, level, moveCount),
     status,
     result: status === "completed" && ["win", "draw", "loss"].includes(record.result) ? record.result : null,
     termination: typeof record.termination === "string" ? record.termination.slice(0, 120) : null,
@@ -331,7 +338,7 @@ function cleanGame(record) {
     finishedAt: ["completed", "terminated"].includes(status) ? normalizeTimestamp(record.finishedAt, now) : null,
     initialEvaluation: record.initialEvaluation || null,
     finalEvaluation: record.finalEvaluation || null,
-    moveCount: Number(record.moveCount) || (Array.isArray(record.moves) ? record.moves.length : 0),
+    moveCount,
   };
 }
 
@@ -341,23 +348,22 @@ function normalizeTimestamp(value, fallback) {
 }
 
 export async function createGame(record) {
-  const game = cleanGame(record);
+  const game = cleanGame({ ...record, revision: 1, generation: makeId("generation") });
   await withStore("games", "readwrite", (store) => requestToPromise(store.add(game)));
   return game;
 }
 
 export async function updateGame(record) {
-  const game = cleanGame(record);
-  await withStore("games", "readwrite", (store) => requestToPromise(store.put(game)));
-  return game;
+  return saveGameProgress(record);
 }
 
 export async function saveGameProgress(record) {
   return withStore("games", "readwrite", async (store) => {
     const existing = await requestToPromise(store.get(record.id));
-    if (!existing) return null;
+    if (!existing) throw new GameConflictError("This game was removed. Resume another saved game or start a new game.");
+    if ((existing.revision || 0) !== (record.revision || 0) || (existing.generation || null) !== (record.generation || null)) throw new GameConflictError();
     const outcome = existing.status !== "in_progress" ? { status: existing.status, result: existing.result, termination: existing.termination, finishedAt: existing.finishedAt } : {};
-    const next = cleanGame({ ...record, ...outcome, label: existing.label, isFavorite: existing.isFavorite });
+    const next = cleanGame({ ...record, ...outcome, revision: (existing.revision || 0) + 1, label: existing.label, isFavorite: existing.isFavorite });
     await requestToPromise(store.put(next));
     return next;
   });
@@ -495,7 +501,7 @@ export async function getStatistics() {
     if (game.result === "win") stats.wins += 1;
     if (game.result === "draw") stats.draws += 1;
     if (game.result === "loss") stats.losses += 1;
-    const level = String(game.stockfishLevel);
+    const level = statisticsLevel(game);
     stats.levels[level] ||= { total: 0, terminated: 0, wins: 0, draws: 0, losses: 0 };
     if (game.status === "completed") stats.levels[level].total += 1;
     if (game.status === "terminated") stats.levels[level].terminated += 1;
@@ -522,7 +528,8 @@ function sanitizeBackupGame(record) {
   if (!record || typeof record !== "object") throw new Error("A backup game is not an object.");
   const replay = replayGame(record.startingFen, record.moves || [], record.currentFen || record.startingFen);
   const clean = cleanGame({ ...record, moves: replay.moves.map((move) => move.san) });
-  clean.pgn = buildPgn(clean.startingFen, clean.moves, resultCode(clean.result, clean.playerColor));
+  replay.chess.header("Event", "Ultra Fischer", "SetUp", "1", "FEN", clean.startingFen, "Result", resultCode(clean.result, clean.playerColor));
+  clean.pgn = replay.chess.pgn();
   return clean;
 }
 
@@ -549,8 +556,12 @@ export async function exportBackup() {
 }
 
 export async function importBackup(backup, mode = "merge") {
+  return importValidatedBackup(validateBackup(backup), mode);
+}
+
+// The browser supplies a payload already checked by the backup validation worker.
+export async function importValidatedBackup(valid, mode = "merge") {
   if (!["merge", "replace"].includes(mode)) throw new Error("Unknown import mode.");
-  const valid = validateBackup(backup);
   const imported = new Map(valid.games.map((record) => [record.id, record]));
   for (const favorite of valid.favoriteGames) imported.set(favorite.id, { ...(imported.get(favorite.id) || favorite), isFavorite: true, favoriteKey: 1 });
   const database = await openDatabase();
@@ -562,11 +573,12 @@ export async function importBackup(backup, mode = "merge") {
     const completion = transactionToPromise(transaction);
     completion.catch(() => null);
     try {
+      const previous = new Map((await requestToPromise(transaction.objectStore("games").getAll())).map((record) => [record.id, record]));
       if (mode === "replace") {
         transaction.objectStore("games").clear();
         transaction.objectStore("savedPositions").clear();
       }
-      for (const record of imported.values()) transaction.objectStore("games").put(record);
+      for (const record of imported.values()) transaction.objectStore("games").put({ ...record, revision: (previous.get(record.id)?.revision || 0) + 1, generation: makeId("generation") });
       for (const position of valid.savedPositions) transaction.objectStore("savedPositions").put(position);
     } catch (error) {
       transaction.abort();
