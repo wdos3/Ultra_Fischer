@@ -4,6 +4,16 @@ All notable Ultra Fischer changes currently present in this repository are recor
 
 ## 2026-10-12
 
+### Backup, rule validation, and interaction fixes
+
+- Export compact JSON with each game stored once; preserve favorites through their record flags and retain compatibility with older duplicate-favorite backups.
+- Remove the fixed 5 MB import rejection. Read and parse files inside the validation worker, retaining its timeout, cleanup, and all-or-nothing import safeguards.
+- Reject inconsistent castling rights when the king or same-color rook is absent, and reject en-passant targets without a preceding pawn double move. Preserve valid FEN targets even when no adjacent pawn can capture.
+- Add shared dialog focus management, background inertness, Tab/Shift+Tab containment, opener restoration, and top-dialog-only Escape handling, including nested setting information and promotion.
+- Preserve promotion-picker focus when it opens during a board mouse press.
+- Coalesce repeated hint requests for the same game position, disable the hint control while pending, and recover cleanly after cancellation or worker failure without stale feedback.
+- Add unit coverage for special-move FEN fields, favorite export round-trips, and validator cleanup. Add browser coverage for new and legacy backups over 5 MB, malformed imports, dialog/promotion keyboard behavior, repeated hints, and hint interruption/retry.
+
 ### Live preference reset
 
 - Apply default preferences to the live page after Delete all local data, including theme, evaluation visibility, difficulty, animation, balance, Friendly Mode, and requested side. Subsequent setting changes and reloads no longer restore deleted preferences.

@@ -7,7 +7,8 @@ import { generatePosition, generateBalancedPosition as findBalancedPosition } fr
 import { positionSettingsKey, cachedPositionAccepted } from "./position-policy.mjs";
 import { buildPgn, replayGame, detectResult, resultCode } from "./chess-rules.mjs";
 import { GameSession } from "./game-session.mjs";
-import { validateBackupText } from "./backup-validator.mjs";
+import { validateBackupFile } from "./backup-validator.mjs";
+import { DialogManager } from "./dialog-manager.mjs";
 import { MoveRecordView } from "./move-record.mjs";
 import { RecordsView } from "./records-view.mjs";
 
@@ -179,6 +180,7 @@ const state = {
   resuming: false,
   sessionConflict: false,
   opponentTurn: null,
+  hintSearch: null,
   animationUntil: 0,
   currentGameId: null,
   currentGameFavorite: false,
@@ -298,17 +300,11 @@ async function createLocalGame(startingFen, score = null) {
   await persistCurrentGameQuietly();
 }
 
-function closeOverlay(element) {
-  if (!element) return;
-  element.classList.add("hidden");
-  element.setAttribute("aria-hidden", "true");
-}
+const dialogs = new DialogManager(document);
 
-function openOverlay(element) {
-  if (!element) return;
-  element.classList.remove("hidden");
-  element.setAttribute("aria-hidden", "false");
-}
+function closeOverlay(element) { dialogs.close(element); }
+
+function openOverlay(element) { dialogs.open(element); }
 
 function closeAppMenu() {
   closeOverlay(ui.appMenu);
@@ -550,13 +546,13 @@ function syncSettingsUI() {
 }
 
 function syncSettingsPanel() {
-  ui.settingsCard.classList.toggle("hidden", !state.settingsOpen);
-  ui.settingsCard.setAttribute("aria-hidden", String(!state.settingsOpen));
+  if (state.settingsOpen) openOverlay(ui.settingsCard);
+  else closeOverlay(ui.settingsCard);
 }
 
 function syncSetupPanel() {
-  ui.newGameDialog.classList.toggle("hidden", !state.setupOpen);
-  ui.newGameDialog.setAttribute("aria-hidden", String(!state.setupOpen));
+  if (state.setupOpen) openOverlay(ui.newGameDialog);
+  else closeOverlay(ui.newGameDialog);
 }
 
 function syncHistoryPanel() {
@@ -726,7 +722,8 @@ function syncActionAvailability() {
   const terminal = state.matchOver || game.game_over();
   const blocked = state.isBusy || state.importing || state.sessionConflict || terminal || !state.engineReady || !state.session;
   ui.undo.disabled = blocked || state.moveLog.length === 0;
-  ui.hintButton.disabled = blocked;
+  ui.hintButton.disabled = blocked || Boolean(state.hintSearch);
+  ui.hintButton.setAttribute("aria-busy", String(Boolean(state.hintSearch)));
   ui.resign.disabled = terminal || state.startingGame || state.importing || state.sessionConflict || !state.session || !state.engineReady;
   ui.toggleMode.disabled = state.startingGame || state.importing || state.resuming || state.sessionConflict || !state.engineReady || terminal;
   ui.aiStrength.disabled = state.importing || state.resuming || state.sessionConflict;
@@ -748,6 +745,8 @@ function terminalEvaluation(overrides = {}) {
 }
 
 function cancelEngineSearches() {
+  state.hintSearch = null;
+  syncActionAvailability();
   new Set([state.analysisEngine, state.opponentEngine].filter(Boolean)).forEach((engine) => {
     engine.cancelPending();
   });
@@ -996,37 +995,43 @@ async function copyPgn(pgn) {
   }
 }
 
-async function showHint() {
-  if (state.isBusy || state.matchOver || game.game_over()) {
-    return;
-  }
+function showHint() {
+  const token = state.taskToken;
+  const fen = game.fen();
+  if (state.hintSearch?.token === token && state.hintSearch.fen === fen) return state.hintSearch.promise;
   if (!state.engineReady) {
     showToast("Engine is still loading.");
     return;
   }
-
+  if (isBoardLocked()) return;
+  const request = { token, fen };
+  state.hintSearch = request;
+  syncActionAvailability();
   setStatus("Analyzing hint...");
-  const token = state.taskToken;
-  const result = await state.analysisEngine.search(game.fen(), {
-    ...ANALYSIS_PROFILE,
-    depth: 12,
-    moveTime: 550,
-  }, { kind: "hint", priority: 10 });
-  if (token !== state.taskToken) {
-    return;
-  }
-  if (result.cancelled) {
-    return;
-  }
-
-  const san = bestMoveToSan(result.bestMove);
-  if (san) {
-    showToast(`Best move: ${san}`);
-    setStatus(`Hint ready: ${san}`);
-  } else {
-    showToast("No legal move available.");
-    setStatus(describeResult());
-  }
+  const isCurrent = () => state.hintSearch === request && token === state.taskToken && game.fen() === fen;
+  request.promise = (async () => {
+    try {
+      const result = await state.analysisEngine.search(fen, {
+        ...ANALYSIS_PROFILE, depth: 12, moveTime: 550,
+      }, { kind: "hint", priority: 10 });
+      if (!isCurrent() || result.cancelled) return;
+      const san = bestMoveToSan(result.bestMove);
+      showToast(san ? `Best move: ${san}` : "No legal move available.");
+      setStatus(san ? `Hint ready: ${san}` : describeResult());
+    } catch (error) {
+      console.warn("Hint search failed.", error);
+      if (isCurrent()) {
+        showToast("Hint interrupted. Try again.");
+        setStatus(describeResult());
+      }
+    } finally {
+      if (state.hintSearch === request) {
+        state.hintSearch = null;
+        syncActionAvailability();
+      }
+    }
+  })();
+  return request.promise;
 }
 
 function describeResult() {
@@ -1582,6 +1587,8 @@ function createBoard() {
       const square = event.target.closest("[data-square]")?.dataset.square;
       if (square) {
         handleSquareClick(square);
+        // A promotion opened on mousedown must keep its new keyboard focus.
+        if (dialogs.active && event.cancelable) event.preventDefault();
       }
     };
     ui.board.addEventListener("mousedown", handleBoardPress);
@@ -1674,7 +1681,6 @@ async function handleRecordAction(event, container) {
 async function importSelectedBackup() {
   const file = ui.importFile.files?.[0];
   if (!file || state.importing || state.startingGame || state.resuming) return;
-  if (file.size > 5 * 1024 * 1024) { showToast("Backup is larger than 5 MB."); ui.importFile.value = ""; return; }
   const session = state.session;
   state.importing = true;
   const token = ++state.taskToken;
@@ -1685,7 +1691,7 @@ async function importSelectedBackup() {
   controls.forEach((control) => { control.disabled = true; });
   ui.importData.textContent = "Validating...";
   try {
-    const valid = await validateBackupText(await file.text());
+    const valid = await validateBackupFile(file);
     const replace = window.confirm("Press OK to replace local data, or Cancel to merge this backup.");
     // Previous saves have already reported their errors; importing may recover the archive.
     await session?.queue.catch(() => null);
@@ -1789,7 +1795,7 @@ function bindEvents() {
   });
 
   ui.hintButton.addEventListener("click", () => {
-    void showHint().catch((error) => { console.error(error); showToast("Hint interrupted. Try again."); setStatus(describeResult()); });
+    void showHint();
   });
 
   ui.historyToggle.addEventListener("click", () => {
@@ -1906,7 +1912,7 @@ function bindEvents() {
   ui.replayPrev.addEventListener("click", () => { state.replay.index = Math.max(0, state.replay.index - 1); renderReplay(); });
   ui.replayNext.addEventListener("click", () => { state.replay.index = Math.min(state.replay.record?.moves?.length || 0, state.replay.index + 1); renderReplay(); });
   ui.replayLast.addEventListener("click", () => { state.replay.index = state.replay.record?.moves?.length || 0; renderReplay(); });
-  ui.exportData.addEventListener("click", async () => { try { const backup = await exportBackup(); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" })); link.download = `Ultra-Fischer-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); showToast("Backup exported."); } catch (error) { console.error(error); showToast("Could not export local data."); } });
+  ui.exportData.addEventListener("click", async () => { try { const backup = await exportBackup(); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(backup)], { type: "application/json" })); link.download = `Ultra-Fischer-backup-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); showToast("Backup exported."); } catch (error) { console.error(error); showToast("Could not export local data."); } });
   ui.importData.addEventListener("click", () => ui.importFile.click());
   ui.importFile.addEventListener("change", () => void importSelectedBackup());
   ui.clearHistory.addEventListener("click", async () => { if (window.confirm("Clear all local game history?")) { await state.session?.detach(); await clearGames(); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); showToast("Game history cleared."); } });
@@ -2020,14 +2026,17 @@ function bindEvents() {
     if (event.key !== "Escape") {
       return;
     }
-    closeSettings();
-    closeSetup();
-    closeAppMenu();
-    closeRecordsMenu();
-    closeOverlay(ui.aboutDialog);
-    closeOverlay(ui.settingInfoDialog);
-    closeOverlay(ui.resultDialog);
-    closePromotionDialog();
+    const active = dialogs.active;
+    if (active) {
+      event.preventDefault();
+      if (active === ui.settingsCard) closeSettings();
+      else if (active === ui.newGameDialog) closeSetup();
+      else if (active === ui.appMenu) closeAppMenu();
+      else if (active === ui.recordsMenu) closeRecordsMenu();
+      else if (active === ui.promotionDialog) closePromotionDialog();
+      else closePanel(active);
+      return;
+    }
     state.historyOpen = false;
     syncHistoryPanel();
   });

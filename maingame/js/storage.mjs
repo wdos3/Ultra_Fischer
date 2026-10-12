@@ -552,7 +552,8 @@ export function validateBackup(backup) {
 
 export async function exportBackup() {
   const [games, preferences, savedPositions] = await Promise.all([listGames(), getPreferences(), listSavedPositions()]);
-  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt: new Date().toISOString(), games, favoriteGames: games.filter((record) => record.isFavorite), savedPositions, preferences };
+  // Favorite flags already live on games; retain the legacy field without duplicating records.
+  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt: new Date().toISOString(), games, favoriteGames: [], savedPositions, preferences };
 }
 
 export async function importBackup(backup, mode = "merge") {

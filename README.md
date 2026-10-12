@@ -13,13 +13,14 @@ The search has a 15-second budget and can return no qualifying position. Retry N
 - Game records, unfinished and terminated games, favorite games, replays, and statistics use IndexedDB in a versioned `Ultra_Fischer` database.
 - Engine and interface preferences use the namespaced `Ultra_Fischer.preferences` localStorage key.
 - The Data & Storage panel exports and imports a validated JSON backup and provides deliberate clear/delete controls.
+- Exports use compact JSON and store each game once, including its favorite flag. Older backups containing a duplicate favorite-games array remain supported.
 - No account, email address, remote game API, or cloud sync is required.
 - Each match retains its own player side, mode, starting position, and result. Starting another game terminates an unfinished match before changing the new game's preferences.
 - Progress saves check record revisions and import generations atomically. A conflicting tab stops recording and can resume the latest saved game or start another match, without overwriting the other tab.
 - AI statistics exclude local PvP games. Legacy records without a stored mode are treated as PvAI because their original mode cannot be recovered.
 - Mid-game difficulty changes are recorded at their move boundary. Games using multiple levels appear in a separate Mixed statistics bucket.
-- Imports replay all SAN moves and verify the resulting FEN before writing. Replacement of games and legacy positions uses one IndexedDB transaction. An invalid record rejects the entire import; nothing is silently discarded.
-- Browser imports parse and validate once in a disposable worker. Board actions pause during import; merging rebases the active record and resumes autosaving, while replacing it with no matching record ends the active session.
+- Imports check the pieces required by castling and en-passant fields, replay all SAN moves, and verify the resulting FEN before writing. Replacement of games and legacy positions uses one IndexedDB transaction. An invalid record rejects the entire import; nothing is silently discarded.
+- Browser imports read, parse, and validate the file in a disposable worker, without a fixed 5 MB rejection limit. Validation retains a two-minute timeout and is subject to browser memory and storage capacity. Board actions pause during import; merging rebases the active record and resumes autosaving, while replacing it with no matching record ends the active session.
 
 ## Engine and rendering
 
@@ -27,9 +28,11 @@ The search has a 15-second budget and can return no qualifying position. Retry N
 - Cancelled searches drain their final UCI `bestmove` before another search begins. Runtime errors, search timeouts, and missing stop replies reject affected tasks and restart the worker.
 - Search deadlines include queueing and worker startup. Expiring a queued task does not interrupt an unrelated active search.
 - Opponent turns preempt lower-priority analysis. The transposition table is retained between searches and reset for a new match.
+- Repeated hints for the same position share one search. The hint button is disabled while pending, cancellation restores it, and obsolete replies cannot overwrite a newer turn or game.
 - Asynchronous turn changes check both match tokens and the requested position, and deduplicate opponent work. Undo reconciles whose turn it is, including undoing an AI opening.
 - Board motion uses frame-aligned transforms. Clicks are distinguished from drags, obsolete animations are cancelled, and destroyed boards release their timers and global handlers.
 - Touch taps suppress compatibility mouse events so tap-to-move and touch dragging coexist without double-selecting squares.
+- Dialogs contain keyboard focus and make the background inert. Nested information dialogs restore focus to their parent, and Escape closes only the top dialog.
 - History and favorites use indexed 50-record pages. The live move list updates incrementally and groups moves by their real side and starting fullmove number.
 - Engine transport, match persistence, position generation/policy, chess validation, and record views are separate modules under `maingame/js`.
 

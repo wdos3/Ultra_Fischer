@@ -13,6 +13,26 @@ export function isValidChessFen(fen) {
   if ((pieces.match(/K/g) || []).length !== 1 || (pieces.match(/k/g) || []).length !== 1) return false;
   const rows = pieces.split("/");
   if (/[pP]/.test(rows[0] + rows[7])) return false;
+  const isPiece = (square, type, color) => {
+    const piece = chess.get(square);
+    return piece?.type === type && piece.color === color;
+  };
+  const castles = { K: ["e1", "h1", "w"], Q: ["e1", "a1", "w"], k: ["e8", "h8", "b"], q: ["e8", "a8", "b"] };
+  for (const right of fields[2]) {
+    if (right === "-") continue;
+    const [king, rook, color] = castles[right];
+    if (!isPiece(king, "k", color) || !isPiece(rook, "r", color)) return false;
+  }
+  if (fields[3] !== "-") {
+    // FEN also records double pushes when no adjacent pawn can capture.
+    const file = fields[3][0];
+    const whiteToMove = fields[1] === "w";
+    const pawnRank = whiteToMove ? "5" : "4";
+    const originRank = whiteToMove ? "7" : "2";
+    if (fields[3][1] !== (whiteToMove ? "6" : "3") || Number(fields[4]) !== 0
+        || chess.get(fields[3]) || chess.get(file + originRank)
+        || !isPiece(file + pawnRank, "p", whiteToMove ? "b" : "w")) return false;
+  }
   // The side that just moved cannot have left its own king in check.
   fields[1] = fields[1] === "w" ? "b" : "w";
   const previousSide = new Chess(fields.join(" "));

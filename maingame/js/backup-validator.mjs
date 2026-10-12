@@ -1,4 +1,4 @@
-export function validateBackupText(text, { workerFactory = (url) => new Worker(url), timeoutMs = 120000 } = {}) {
+export function validateBackupFile(file, { workerFactory = (url) => new Worker(url), timeoutMs = 120000 } = {}) {
   return new Promise((resolve, reject) => {
     const worker = workerFactory(new URL("./backup-worker.js", import.meta.url));
     let settled = false;
@@ -17,6 +17,6 @@ export function validateBackupText(text, { workerFactory = (url) => new Worker(u
     });
     worker.addEventListener("error", () => finish(null, new Error("The backup validator could not run. No records were imported.")));
     worker.addEventListener("messageerror", () => finish(null, new Error("The backup validator returned an unreadable result.")));
-    try { worker.postMessage(text); } catch (error) { finish(null, error); }
+    try { worker.postMessage(file); } catch (error) { finish(null, error); }
   });
 }

@@ -21,6 +21,7 @@ import {
   importBackup,
   getPreferences,
   getStatistics,
+  exportBackup,
 } from "./storage.mjs";
 
 const startingFen = "7k/8/8/8/8/8/8/K7 w - - 0 1";
@@ -192,4 +193,16 @@ test("keeps terminated games distinct from completed results and accepts favorit
   assert.equal(backup.games[0].result, null);
   assert.equal(backup.favoriteGames[0].isFavorite, true);
   assert.equal(backup.savedPositions.length, 0);
+});
+
+test("compact exports store favorites once and round-trip their flags", async () => {
+  await clearGames();
+  await createGame({ id: "favorite-export", startingFen, moves: [], isFavorite: true });
+  await createGame({ id: "ordinary-export", startingFen, moves: [], isFavorite: false });
+  const backup = await exportBackup();
+  assert.equal(backup.games.length, 2);
+  assert.deepEqual(backup.favoriteGames, []);
+  await importBackup(backup, "replace");
+  assert.equal((await getGame("favorite-export")).isFavorite, true);
+  assert.equal((await getGame("ordinary-export")).isFavorite, false);
 });

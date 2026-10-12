@@ -26,6 +26,7 @@ async function seed(page, record = {}, { fake = true, resume = true, create = tr
     const NativeWorker = window.Worker;
     window.testWorkers = [];
     window.holdOpponent = false;
+    window.hintDelay = 30;
     class ControlledWorker extends EventTarget {
       constructor(url) {
         if (String(url).includes("backup-worker.js")) return new NativeWorker(url);
@@ -53,7 +54,7 @@ async function seed(page, record = {}, { fake = true, resume = true, create = tr
             this.emit("bestmove " + (this.moves[0] || "(none)"));
           };
           if (window.holdOpponent && depth <= 8) this.held = respond;
-          else this.timer = setTimeout(respond, 30);
+          else this.timer = setTimeout(respond, command.includes("movetime 550") ? window.hintDelay : 30);
         }
         if (command === "stop") {
           clearTimeout(this.timer);
@@ -88,7 +89,7 @@ async function openRecords(page, panel) {
 async function inspectController(page) {
   const source = await readFile(new URL("../../maingame/js/chessboard.js", import.meta.url), "utf8");
   await page.route("**/maingame/js/chessboard.js*", (route) => route.fulfill({
-    contentType: "text/javascript", body: source + "\nglobalThis.testController = { state, game, continuePlay };",
+    contentType: "text/javascript", body: source + "\nglobalThis.testController = { state, game, continuePlay, showHint };",
   }));
 }
 
@@ -103,6 +104,154 @@ async function importFile(page, backup, replace = false) {
   await expect(page.locator("#toast")).toHaveText("Backup imported.");
   await page.locator('#data-dialog [data-close-panel]').click();
 }
+
+test("exported and legacy backups larger than 5 MB can be restored with favorite flags intact", async ({ page }) => {
+  test.setTimeout(120000);
+  await seed(page, { mode: "pvp" });
+  const counts = await page.evaluate(async (fen) => {
+    const storage = await import("/maingame/js/storage.mjs");
+    for (let index = 0; index < 7500; index += 1) {
+      await storage.createGame({ id: "bulk" + index, label: "Archived favorite " + "x".repeat(90),
+        startingFen: fen, currentFen: fen, moves: [], mode: "pvp", status: "terminated", isFavorite: index % 2 === 0 });
+    }
+    const backup = await storage.exportBackup();
+    return { games: backup.games.length, favorites: backup.games.filter((game) => game.isFavorite).length };
+  }, standardFen);
+  await page.locator("#settings-toggle").click();
+  await page.locator('#app-menu [data-panel="data"]').click();
+  const downloaded = page.waitForEvent("download");
+  await page.locator("#export-data").click();
+  const download = await downloaded;
+  const chunks = [];
+  for await (const chunk of await download.createReadStream()) chunks.push(chunk);
+  const exported = Buffer.concat(chunks);
+  expect(exported.length).toBeGreaterThan(5 * 1024 * 1024);
+  const backup = JSON.parse(exported.toString("utf8"));
+  expect(backup.favoriteGames).toEqual([]);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#import-file").setInputFiles({ name: "large.json", mimeType: "application/json", buffer: exported });
+  await expect(page.locator("#toast")).toHaveText("Backup imported.", { timeout: 120000 });
+  const restored = await page.evaluate(async () => (await import("/maingame/js/storage.mjs")).exportBackup());
+  expect(restored.games.length).toBe(counts.games);
+  expect(restored.games.filter((game) => game.isFavorite).length).toBe(counts.favorites);
+  expect((await readRecord(page, "bulk7499")).label).toBe(backup.games.find((game) => game.id === "bulk7499").label);
+  await expect(page.locator("#import-data")).toBeEnabled();
+  const legacy = { ...backup, favoriteGames: backup.games.filter((game) => game.isFavorite) };
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#import-file").setInputFiles({ name: "legacy-large.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(legacy, null, 2)) });
+  await expect(page.locator("#import-data")).toBeEnabled({ timeout: 120000 });
+  await expect(page.locator("#toast")).toHaveText("Backup imported.");
+  expect((await readRecord(page, "bulk0")).isFavorite).toBe(true);
+  console.log("Large backup round-trip:", JSON.stringify({ bytes: exported.length, ...counts }));
+});
+
+test("invalid special-move rights reject a backup without replacing history", async ({ page }) => {
+  await seed(page, { mode: "pvp" });
+  await page.locator("#settings-toggle").click();
+  await page.locator('#app-menu [data-panel="data"]').click();
+  for (const startingFen of ["4k3/8/8/8/8/8/P7/4K3 w KQ - 0 1", "4k3/8/8/4P3/8/8/8/4K3 w - d6 0 1"]) {
+    await page.locator("#import-file").setInputFiles({ name: "invalid-rights.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({
+      format: "Ultra_Fischer-backup", version: 1, games: [{ id: "invalid", startingFen, moves: [] }], favoriteGames: [],
+    })) });
+    await expect(page.locator("#import-data")).toBeEnabled();
+    await expect(page.locator("#toast")).toContainText("invalid starting position");
+    expect((await readRecord(page)).label).toBe("Fixture game");
+    expect(await readRecord(page, "invalid")).toBeUndefined();
+  }
+});
+
+test("dialogs trap keyboard focus, block background controls, and restore the opener", async ({ page }) => {
+  await seed(page, { mode: "pvp" });
+  await page.locator("#settings-toggle").click();
+  await expect(page.locator("#menu-close")).toBeFocused();
+  expect(await page.locator("main").evaluate((element) => element.inert)).toBe(true);
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.locator('#app-menu [data-panel="data"]')).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.locator("#menu-close")).toBeFocused();
+  await page.evaluate(() => document.getElementById("toggle-mode").focus());
+  expect(await page.evaluate(() => document.getElementById("app-menu").contains(document.activeElement))).toBe(true);
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#app-menu")).toBeHidden();
+  await expect(page.locator("#settings-toggle")).toBeFocused();
+  await expect(page.locator("#mode-pill")).toHaveText("Player vs Player");
+  expect(await page.locator("main").evaluate((element) => element.inert)).toBe(false);
+  await page.locator("#settings-toggle").click();
+  await page.locator('#app-menu [data-panel="settings"]').click();
+  await page.locator('[data-setting-info="stockfish"]').click();
+  await expect(page.locator("#setting-info-close")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#setting-info-dialog")).toBeHidden();
+  await expect(page.locator("#settings-card")).toBeVisible();
+  await expect(page.locator('[data-setting-info="stockfish"]')).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#settings-card")).toBeHidden();
+  await expect(page.locator("#settings-toggle")).toBeFocused();
+  await openRecords(page, "history");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#history-dialog")).toBeHidden();
+  await expect(page.locator("#records-toggle")).toBeFocused();
+});
+
+test("promotion choices trap focus and Escape returns to the board without changing a move", async ({ page }) => {
+  await seed(page, { startingFen: "7k/P7/8/8/8/8/8/K7 w - - 0 1", mode: "pvp" });
+  await clickMove(page, "a7", "a8");
+  await expect(page.locator('#promotion-options [data-piece="q"]')).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.locator('#promotion-options [data-piece="b"]')).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#promotion-dialog")).toBeHidden();
+  expect((await readRecord(page)).moves).toEqual([]);
+  expect(await page.locator("main").evaluate((element) => element.inert)).toBe(false);
+  const from = await page.locator('#board [data-square="a7"]').boundingBox();
+  const to = await page.locator('#board [data-square="a8"]').boundingBox();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 20 });
+  await page.mouse.up();
+  await expect(page.locator('#promotion-options [data-piece="q"]')).toBeFocused();
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await expect(page.locator('#promotion-options [data-piece="r"]')).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await readRecord(page)).moves[0]).toMatch(/^a8=R/);
+});
+
+test("rapid hint requests share one search and re-enable the button after success", async ({ page }) => {
+  await inspectController(page);
+  await seed(page, { mode: "pvp" });
+  const shared = await page.evaluate(() => {
+    window.hintDelay = 550;
+    const { showHint } = window.testController;
+    const first = showHint();
+    const requests = Array.from({ length: 10 }, () => showHint());
+    for (let count = 0; count < 10; count += 1) document.getElementById("hint-button").click();
+    return requests.every((request) => request === first);
+  });
+  expect(shared).toBe(true);
+  await expect(page.locator("#hint-button")).toBeDisabled();
+  await expect(page.locator("#hint-button")).toHaveAttribute("aria-busy", "true");
+  await expect(page.locator("#toast")).toContainText("Best move:");
+  await expect(page.locator("#hint-button")).toBeEnabled();
+  expect(await page.evaluate(() => window.testWorkers.flatMap((worker) => worker.commands).filter((command) => command.includes("go depth 12 movetime 550")).length)).toBe(1);
+});
+
+test("hint cancellation and worker failure do not lock controls or leak stale feedback", async ({ page }) => {
+  await seed(page, { mode: "pvp" });
+  await page.evaluate(() => { window.hintDelay = 550; });
+  await page.locator("#hint-button").click();
+  await expect(page.locator("#hint-button")).toBeDisabled();
+  await clickMove(page, "e2", "e4");
+  await expect(page.locator("#status-text")).toHaveText("Black to move.");
+  await expect(page.locator("#hint-button")).toBeEnabled();
+  await page.locator("#hint-button").click();
+  await page.evaluate(() => window.testWorkers[0].dispatchEvent(new Event("error")));
+  await expect(page.locator("#toast")).toHaveText("Hint interrupted. Try again.");
+  await expect(page.locator("#hint-button")).toBeEnabled();
+  await page.locator("#hint-button").click();
+  await expect(page.locator("#toast")).toContainText("Best move:");
+  await expect(page.locator("#hint-button")).toBeEnabled();
+});
 
 test("deleting all data applies default preferences and subsequent changes cannot revive old settings", async ({ page }) => {
   await seed(page, { mode: "pvp", stockfishLevel: 8 }, { preferences: {
