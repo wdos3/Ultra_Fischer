@@ -9,9 +9,12 @@ test.beforeEach(async ({ page }) => {
 });
 test.afterEach(async ({ page }) => { expect(page.runtimeErrors).toEqual([]); });
 
-async function seed(page, record = {}, { fake = true, resume = true, create = true } = {}) {
+async function seed(page, record = {}, { fake = true, resume = true, create = true, preferences } = {}) {
   await page.goto("/404.html");
   await page.addScriptTag({ url: "/maingame/js/chess.js" });
+  if (preferences) await page.evaluate(async (preferences) => {
+    await (await import("/maingame/js/storage.mjs")).savePreferences(preferences);
+  }, preferences);
   if (create) await page.evaluate(async ({ standardFen, record }) => {
     const storage = await import("/maingame/js/storage.mjs");
     await storage.createGame({
@@ -100,6 +103,53 @@ async function importFile(page, backup, replace = false) {
   await expect(page.locator("#toast")).toHaveText("Backup imported.");
   await page.locator('#data-dialog [data-close-panel]').click();
 }
+
+test("deleting all data applies default preferences and subsequent changes cannot revive old settings", async ({ page }) => {
+  await seed(page, { mode: "pvp", stockfishLevel: 8 }, { preferences: {
+    aiStrength: "8", theme: "blue", evalVisible: true, evalVisibilityConfigured: true,
+    friendlyMode: false, moveAnimation: "instant", positionBalanceCp: 450, requestedColor: "b",
+  } });
+  await expect(page.locator("body")).toHaveAttribute("data-theme", "blue");
+  await page.locator("#settings-toggle").click();
+  await page.locator('#app-menu [data-panel="data"]').click();
+  page.once("dialog", (dialog) => dialog.accept("DELETE"));
+  await page.locator("#delete-all-data").click();
+  await expect(page.locator("#toast")).toHaveText("All local data deleted.");
+  await expect(page.locator("body")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator("body")).toHaveClass(/eval-hidden/);
+  await expect(page.locator("#ai-strength")).toHaveValue("4");
+  await expect(page.locator("#position-balance")).toHaveValue("150");
+  await expect(page.locator("#move-animation")).toHaveValue("slide");
+  await expect(page.locator("#friendly-mode-toggle")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator('.color-button[data-color="w"]')).toHaveClass(/active/);
+  expect(await readRecord(page)).toBeUndefined();
+  await page.locator('#data-dialog [data-close-panel]').click();
+  await page.locator("#eval-toggle").click();
+  const expectedPreferences = {
+    aiStrength: "4", theme: "dark", evalVisible: true, evalVisibilityConfigured: true,
+    friendlyMode: true, moveAnimation: "slide", positionBalanceCp: 150,
+    requestedColor: "w", settingsOpen: false,
+  };
+  const preferences = () => page.evaluate(async () => (await import("/maingame/js/storage.mjs")).getPreferences());
+  await expect.poll(preferences).toEqual(expectedPreferences);
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-theme", "dark");
+  await expect.poll(preferences).toEqual(expectedPreferences);
+});
+
+test("cancelling Delete all data preserves preferences and the active game", async ({ page }) => {
+  await seed(page, { mode: "pvp", stockfishLevel: 8 }, { preferences: { aiStrength: "8", theme: "blue" } });
+  await page.locator("#settings-toggle").click();
+  await page.locator('#app-menu [data-panel="data"]').click();
+  page.once("dialog", (dialog) => dialog.accept("CANCEL"));
+  await page.locator("#delete-all-data").click();
+  await expect(page.locator("body")).toHaveAttribute("data-theme", "blue");
+  expect((await readRecord(page)).id).toBe("fixture");
+  await page.locator('#data-dialog [data-close-panel]').click();
+  await clickMove(page, "e2", "e4");
+  await expect.poll(async () => (await readRecord(page)).moves).toEqual(["e4"]);
+  expect(await page.evaluate(async () => (await import("/maingame/js/storage.mjs")).getPreferences())).toMatchObject({ aiStrength: "8", theme: "blue" });
+});
 
 test("touch taps and touch drags each make exactly one move", async ({ browser }) => {
   const context = await browser.newContext({ isMobile: true, hasTouch: true, viewport: { width: 390, height: 844 } });

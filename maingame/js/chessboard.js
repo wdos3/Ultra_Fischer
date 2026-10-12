@@ -1912,7 +1912,24 @@ function bindEvents() {
   ui.clearHistory.addEventListener("click", async () => { if (window.confirm("Clear all local game history?")) { await state.session?.detach(); await clearGames(); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); showToast("Game history cleared."); } });
   ui.clearFavorites.addEventListener("click", async () => { if (window.confirm("Remove all games from Favorite Games?")) { await clearGameFavorites(); state.currentGameFavorite = false; state.session?.patchMetadata({ isFavorite: false }); await refreshStorageSummary(); await refreshFavoritesList(); await refreshHistoryList(); showToast("Favorite games cleared."); } });
   ui.resetPreferences.addEventListener("click", async () => { if (window.confirm("Reset local preferences?")) { applyPreferences(await resetPreferences()); await persistPreferences(); showToast("Preferences reset."); } });
-  ui.deleteAllData.addEventListener("click", async () => { if (window.prompt("Type DELETE to remove all local games, favorite games, and preferences.") === "DELETE") { await state.session?.detach(); await deleteAllData(); showToast("All local data deleted."); await refreshStorageSummary(); await refreshHistoryList(); await refreshFavoritesList(); } });
+  ui.deleteAllData.addEventListener("click", async () => {
+    if (window.prompt("Type DELETE to remove all local games, favorite games, and preferences.") !== "DELETE") return;
+    ui.deleteAllData.disabled = true;
+    try {
+      await state.session?.detach();
+      await deleteAllData();
+      applyPreferences(await getPreferences());
+      showToast("All local data deleted.");
+      await refreshStorageSummary();
+      await refreshHistoryList();
+      await refreshFavoritesList();
+    } catch (error) {
+      console.error(error);
+      showToast("Could not delete all local data. Check storage and try again.");
+    } finally {
+      ui.deleteAllData.disabled = false;
+    }
+  });
 
   ui.settingsClose.addEventListener("click", closeSettings);
 

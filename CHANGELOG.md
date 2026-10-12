@@ -4,6 +4,12 @@ All notable Ultra Fischer changes currently present in this repository are recor
 
 ## 2026-10-12
 
+### Live preference reset
+
+- Apply default preferences to the live page after Delete all local data, including theme, evaluation visibility, difficulty, animation, balance, Friendly Mode, and requested side. Subsequent setting changes and reloads no longer restore deleted preferences.
+- Disable duplicate deletion requests while deletion runs and report failures without claiming success.
+- Add browser regressions for deletion followed by settings changes and reload, and cancellation preserving both preferences and active recording.
+
 ### Input, persistence, and turn recovery
 
 - Prevent touch compatibility mouse events from cancelling square selection; retain both touch tapping and dragging.
